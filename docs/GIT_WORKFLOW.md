@@ -42,54 +42,49 @@ Hi Wooo0! You've successfully authenticated, but GitHub does not provide shell a
 
 本机密钥：`~/.ssh/id_ed25519` → `SHA256:ouGrey26vVQJKIYpFBj4hcNjBgsegqOTlre8DA4Khxs`
 
-### 推送（在本机终端执行）
+### 推送（2026-10-16 20:10 全部完成）
 
-首次推送已完成（2026-10-16 20:05）：`git push -u ours ours/32bit-headunit` 成功，
-远端已出现 `refs/heads/ours/32bit-headunit`（只传了 431 KiB —— 远端 `main` 与我们有共同历史，增量很小）。
+远端现在有：
 
-日常继续推：
+| 引用 | 提交 | 说明 |
+|---|---|---|
+| `refs/heads/ours/32bit-headunit` | `fe0bcbb` | **我们的版本**（主工作分支） |
+| `refs/heads/pr10` | `865b1c7` | PR#10 干净基线（存档） |
+| `refs/heads/ref/pr24` | `f852d59` | 上游 PR#24（存档） |
+| `refs/heads/wip/softap-on-2026-10-16` | `9fb2304` | 走错那一段（存档） |
+| `refs/heads/main` | `059b2bb` | 上游 v0.1.1 |
+| `refs/tags/v0.1.0` · `refs/tags/v0.1.1` | `7501c66` · `059b2bb` | 上游标签 |
+
+日常推送：
 
 ```bash
 cd <项目路径>/miauto
-git push                    # upstream 已设好，直接推当前分支即可
-```
-
-想把自己这些分支一并备份（只推分支，约 2 MB）：
-
-```bash
-git push ours --all
+git push             # upstream 已设好，直接推当前分支
+git push ours --all  # 把所有本地分支一次性同步上去
 ```
 
 > ⚠️ **不要用 `--tags`。** 本仓库的 `v0.1.7` 标签指向 Johnny 的提交 `ddc7662`，
-> 推它会把 Johnny 的整段历史（含他 `releases/*.apk`）一起带过去 —— 实测
+> 推它会把 Johnny 的整段历史（含他 `releases/*.apk`）一起搬过去 —— 实测
 > **2824 个对象 / 290.6 MB 未压缩**；而 `--all` 只推分支只要 59 个对象 / 2.1 MB。
-> 确实需要标签就显式挑：`git push ours v0.1.0 v0.1.1`
+> 需要标签就显式挑（`v0.1.0`/`v0.1.1` 已推，成本≈0）。
 
-> ⚠️ **本机默认终端是 Windows PowerShell 5.1，不支持 `&&`。**
-> 报错 `标记"&&"不是此版本中的有效语句分隔符` 就是这个原因。多条命令用 `;` 分隔，或一条一条跑。
+### 怎么验证推送真的成功了（重要）
 
-远端状态随时可查（**https 在 AI 环境可用，所以能从这边独立核实，不必只看退出码**）：
+**绝不看退出码。** 用下面两条，任一条即可：
 
 ```bash
-git ls-remote --heads https://github.com/Wooo0/MiAuto.git
+git ls-remote --heads https://github.com/Wooo0/MiAuto.git   # ← 首选，走 https，随时可用
+git config --get branch.ours/32bit-headunit.remote          # ← 本地信号，push 成功才会写入
 ```
 
-> ⚠️ **AI 执行环境的传输差异（实测，务必记住）**
->
-> | 传输方式 | AI 环境内 |
-> |---|---|
-> | `git` + **https** | ✅ 正常（`git ls-remote https://github.com/Wooo0/MiAuto.git` 能列出分支） |
-> | `git` + **ssh** | ❌ **被静默吞掉**：退出码 0 且 stdout+stderr 全空，`GIT_TRACE=1` 连 trace 都不打印 |
-> | `git` + file（本地路径） | ✅ 正常 |
-> | 直连 `ssh`（不经 git） | ✅ 正常 |
->
-> 后果：在 AI 环境里执行 `git push` **看起来成功、实际什么都没做**
-> —— `branch.<name>.remote` 不会写入，也不产生远端跟踪引用。
-> **判断推送是否成功，一律看 `git ls-remote ours` 有没有列出 `refs/heads/...`，
-> 或看本地 `git config --get branch.<名>.remote` 是否被写入，绝不要看退出码。**
->
-> HTTPS 写入不可行：本机 `credential.helper=manager` 但无已存凭据、也找不到 GCM 可执行文件，
-> 会弹交互式认证，非交互环境直接挂住。**所以推送请在你自己终端里做。**
+原因：本机曾在**同一把已注册的 SSH 密钥下**出现过 `git push` / `git ls-remote`
+返回**退出码 0 且 stdout+stderr 全空、`GIT_TRACE=1` 连 trace 都不打印**的现象
+（"看起来成功、实际什么都没做"），而同一时刻直连 `ssh` 与 https 都正常。
+该现象**后来不再复现，原因未能确定**，所以不排除是间歇性的。
+**结论：推送后一律用上面两条核实，不要凭退出码或"没报错"下判断。**
+
+> ⚠️ **本机默认终端是 Windows PowerShell 5.1，不支持 `&&`**
+> （报 `标记"&&"不是此版本中的有效语句分隔符`）。多条命令用 `;` 分隔，或一条一条跑。
 
 于是"看别人改了什么"不再靠翻文件，而是：
 
