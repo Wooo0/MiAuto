@@ -30,38 +30,44 @@ GitHub 在公司网络下不可达，所以这里把另外三个源头做成了*
 | `offline` | `../refs/upstream` | 上游全量历史（含 `pr10`、`pr24`、`v0.1.0`、`v0.1.1`） |
 | `johnny` | `../refs/johnny` | gitee Johnny_Guo v0.1.7 全量代码（低端车机适配版） |
 
-### `ours` 的认证状态（2026-10-16 19:20）
+### `ours` 的认证状态（2026-10-16 19:25 已打通）
 
-网络是通的（本机 `~/.ssh/config` 已把 `github.com` 映射到 `ssh.github.com:443`，
-`Connection established` 成功），但**认证被拒**：
-
-```
-git@ssh.github.com: Permission denied (publickey).
-```
-
-本机密钥已存在、也已被送出，只是 GitHub 侧不认识它：
-`~/.ssh/id_ed25519` → `SHA256:ouGrey26vVQJKIYpFBj4hcNjBgsegqOTlre8DA4Khxs`
-
-**待办：把下面这把公钥加到 `Wooo0` 账号**
-（GitHub → Settings → SSH and GPG keys → New SSH key；或该仓库 Settings → Deploy keys）。
-
-```
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPGCWsPl29DVGYgtXvUmFLPRXMHYwUk25X6lpw9+/I21 wang.tao@me.com
-```
-
-加完后验证并推送（**建议在你自己的终端里跑**）：
+本机 `~/.ssh/config` 已把 `github.com` 映射到 `ssh.github.com:443`
+（**这条映射很关键**，直连 22 端口不通），公钥已注册到 `Wooo0` 账号，认证**通过**：
 
 ```bash
-ssh -T git@github.com                       # 期望：Hi <用户名>! You've successfully authenticated...
-cd <项目路径>/miauto_src
-git push -u ours ours/32bit-headunit        # 主分支
-git push ours --all && git push ours --tags # 可选：把基线/参照分支和标签一并备份
+$ ssh -T git@github.com
+Hi Wooo0! You've successfully authenticated, but GitHub does not provide shell access.
 ```
 
-> ⚠️ **注意**：在 AI 的执行环境里 `git` 的网络命令会被静默吞掉 ——
-> `git ls-remote` / `git push` 会返回**退出码 0 且零输出**，看起来像成功，实际什么都没做
-> （已用 `GIT_TRACE=1` 验证：连 trace 都不打印；同一时刻直连 `ssh` 才给出真实结果）。
-> **所以推送结果一律以 `git ls-remote ours` 有没有列出 `refs/heads/...` 为准，不要看退出码。**
+本机密钥：`~/.ssh/id_ed25519` → `SHA256:ouGrey26vVQJKIYpFBj4hcNjBgsegqOTlre8DA4Khxs`
+
+### 首次推送（在本机终端执行）
+
+```bash
+cd <项目路径>/miauto_src
+git push -u ours ours/32bit-headunit         # 我们的版本主分支
+git push ours --all && git push ours --tags  # 可选：基线/参照分支与标签一并备份
+```
+
+推送前远端状态：只有 `main` = `059b2bb`（上游 v0.1.1 的原始 fork 状态），我们的工作尚未上去。
+
+> ⚠️ **AI 执行环境的传输差异（实测，务必记住）**
+>
+> | 传输方式 | AI 环境内 |
+> |---|---|
+> | `git` + **https** | ✅ 正常（`git ls-remote https://github.com/Wooo0/MiAuto.git` 能列出分支） |
+> | `git` + **ssh** | ❌ **被静默吞掉**：退出码 0 且 stdout+stderr 全空，`GIT_TRACE=1` 连 trace 都不打印 |
+> | `git` + file（本地路径） | ✅ 正常 |
+> | 直连 `ssh`（不经 git） | ✅ 正常 |
+>
+> 后果：在 AI 环境里执行 `git push` **看起来成功、实际什么都没做**
+> —— `branch.<name>.remote` 不会写入，也不产生远端跟踪引用。
+> **判断推送是否成功，一律看 `git ls-remote ours` 有没有列出 `refs/heads/...`，
+> 或看本地 `git config --get branch.<名>.remote` 是否被写入，绝不要看退出码。**
+>
+> HTTPS 写入不可行：本机 `credential.helper=manager` 但无已存凭据、也找不到 GCM 可执行文件，
+> 会弹交互式认证，非交互环境直接挂住。**所以推送请在你自己终端里做。**
 
 于是"看别人改了什么"不再靠翻文件，而是：
 
