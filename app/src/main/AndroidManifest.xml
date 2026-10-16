@@ -66,11 +66,8 @@
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- 闪退元凶黑匣子：授权「使用情况访问」后可查出页面被外部关闭瞬间谁抢了前台。
-         该权限是特殊权限（appops），清单声明 + 用户在设置里手动允许即可，不会自动获得。 -->
-    <uses-permission
-        android:name="android.permission.PACKAGE_USAGE_STATS"
-        tools:ignore="ProtectedPermissions" />
+    <!-- 2026-10-16 移除 PACKAGE_USAGE_STATS（「闪退元凶黑匣子」探针）：那是 SoftAP 走错路期间
+         为查「谁把我们的页面挤掉」加的，属于诊断探针而非功能，随该工程一并回退。 -->
     <uses-permission android:name="android.permission.ACCESS_SUPERUSER" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.BROADCAST_STICKY" />

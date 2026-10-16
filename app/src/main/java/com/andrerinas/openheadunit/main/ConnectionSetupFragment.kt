@@ -61,35 +61,6 @@ class ConnectionSetupFragment : Fragment() {
         })
         text(root, getString(R.string.setup_intro), 28)
         text(root, getString(R.string.setup_saved_details_hint), 16)
-
-        // --- 通道选择：USB 有线 / 无线（用户要求的页面逻辑：先选通道，再配对应设置）---
-        val usbChannel = settings.connectionChannel == "usb"
-        card(root, getString(R.string.setup_channel_title)) { box ->
-            button(box, getString(R.string.setup_channel_usb), usbChannel) {
-                if (settings.connectionChannel != "usb") { settings.connectionChannel = "usb"; render() }
-            }
-            text(box, getString(R.string.setup_channel_usb_hint), 16)
-            button(box, getString(R.string.setup_channel_wireless), !usbChannel) {
-                if (settings.connectionChannel != "wireless") { settings.connectionChannel = "wireless"; render() }
-            }
-            text(box, getString(R.string.setup_channel_wireless_hint), 16)
-        }
-
-        if (usbChannel) {
-            card(root, getString(R.string.setup_usb_ready_title)) { box ->
-                text(box, getString(R.string.setup_usb_ready_hint), 16)
-                text(box, getString(R.string.setup_usb_privileged_hint), 16)
-            }
-            card(root, getString(R.string.setup_pair_and_connect)) { box ->
-                text(box, getString(R.string.setup_pair_instructions), 16)
-                button(box, getString(R.string.setup_open_bluetooth_settings)) { openSystem(Intent(SystemSettings.ACTION_BLUETOOTH_SETTINGS)) }
-                button(box, getString(R.string.setup_review_app_permissions)) { findNavController().navigate(R.id.permissionsFragment) }
-                button(box, getString(R.string.setup_done_return_to_diauto)) { requireActivity().finish() }.isEnabled = !pendingCarHotspotSetup
-            }
-            scroll?.post { scroll.scrollTo(0, previousScroll) }
-            return
-        }
-
         card(root, getString(R.string.setup_choose_connection)) { box ->
             val options = listOf(
                 Triple(1, getString(R.string.setup_built_in_car_hotspot), getString(R.string.setup_car_hotspot_hint)),
@@ -121,18 +92,6 @@ class ConnectionSetupFragment : Fragment() {
                     com.andrerinas.openheadunit.aap.SoftApState.NOT_ENABLED -> getString(R.string.setup_hotspot_off)
                     else -> getString(R.string.setup_hotspot_unknown)
                 }, 16)
-                // 热点信息缺失警示：SDK 读不到系统配置（恒晨 ROM 拦截），没填就用随机 SSID 宣称，手机必然连不上
-                if (settings.hotspotSsid.isEmpty()) {
-                    text(box, getString(R.string.setup_hotspot_missing_warning), 16)
-                } else {
-                    // 已填时显示当前值：SSID 明文 + 密码是否已设置（不看密码本身）
-                    text(box, getString(
-                        R.string.setup_hotspot_current,
-                        settings.hotspotSsid,
-                        if (settings.hotspotPassword.isEmpty()) getString(R.string.setup_hotspot_password_not_set)
-                        else getString(R.string.setup_hotspot_password_set)
-                    ), 16)
-                }
                 button(box, getString(R.string.setup_open_car_hotspot_settings)) { openSystem(Intent("com.android.settings.WIFI_TETHER_SETTINGS")) }
                 button(box, if (pendingCarHotspotSetup) getString(R.string.setup_save_and_use_hotspot) else getString(R.string.setup_edit_hotspot, settings.hotspotSsid.ifEmpty { getString(R.string.setup_not_set) })) { editHotspot(pendingCarHotspotSetup) }
                 if (pendingCarHotspotSetup) text(box, getString(R.string.setup_hotspot_pending), 16)
@@ -145,14 +104,6 @@ class ConnectionSetupFragment : Fragment() {
                     setOnCheckedChangeListener { _, checked -> settings.autoEnableHotspot = checked; render() }
                 })
                 text(box, getString(R.string.setup_auto_hotspot_hint), 16)
-                box.addView(androidx.appcompat.widget.SwitchCompat(requireContext()).apply {
-                    text = getString(R.string.setup_p2p_only)
-                    setTextColor(color(R.color.da_text))
-                    minHeight = dp(60)
-                    isChecked = settings.iccoaP2pOnly
-                    setOnCheckedChangeListener { _, checked -> settings.iccoaP2pOnly = checked; render() }
-                })
-                text(box, getString(R.string.setup_p2p_only_hint), 16)
                 if (!granted) button(box, getString(R.string.setup_allow_automatic_hotspot_control)) {
                     openSystem(Intent(SystemSettings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${requireContext().packageName}")))
                 }
@@ -174,7 +125,9 @@ class ConnectionSetupFragment : Fragment() {
             button(box, getString(R.string.setup_review_app_permissions)) { findNavController().navigate(R.id.permissionsFragment) }
             button(box, getString(R.string.setup_done_return_to_diauto)) { requireActivity().finish() }.isEnabled = !pendingCarHotspotSetup
         }
-        // 「更喜欢有线连接？」卡已由顶部通道选择卡取代（选 USB 即切换，不再只是文字提示）
+        card(root, getString(R.string.setup_prefer_a_cable)) { box ->
+            text(box, getString(R.string.setup_usb_instructions), 16)
+        }
         scroll?.post { scroll.scrollTo(0, previousScroll) }
     }
 

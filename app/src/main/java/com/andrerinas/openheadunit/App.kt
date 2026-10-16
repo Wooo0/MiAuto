@@ -69,47 +69,9 @@ class App : Application() {
             AppLog.w("App started in Direct Boot mode (locked). Settings access deferred.")
         }
 
-        // [32bit-debug] 进程启动标记。
-        // 2026-10-16：上一份日志里 "AapService creating..." 出现 10 次而
-        // "AapService destroying..." 出现 0 次 —— 说明每一轮"闪退"之后进程都是被硬杀掉的
-        // （SIGKILL/force-stop 不走 onDestroy）。这一行给出确凿的进程边界，配合每行的
-        // p<pid>@ 前缀，可以直接把整份日志切成"第 N 轮进程"。
-        AppLog.i("========== 进程启动 PROCESS START pid=" + android.os.Process.myPid()
-                + " uptime=" + android.os.SystemClock.uptimeMillis() + " ==========")
-
-        // [32bit-debug] 全局 Activity 生命周期探针。
-        // 此前只在 MainActivity 上打点，覆盖不到三种情况：
-        //   ① 本应用其它 Activity（UsbAttachedActivity / IcocaProjectionActivity / AutomationActivity）
-        //      被结束；② 同一进程内出现第二个 MainActivity 实例；③ 不同 taskId 上的实例。
-        // 这里统一记录，并带上 taskId / isFinishing / changingConfigurations —— 用于区分
-        // "系统侧外部 finish"、"配置变更重建"、"任务被移除"。
-        registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
-            private fun tag(a: android.app.Activity): String =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) a.taskId.toString() else "?"
-
-            override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {
-                AppLog.i("ACT-CREATE  " + a.javaClass.simpleName + " task=" + tag(a))
-            }
-
-            override fun onActivityStarted(a: android.app.Activity) {
-                AppLog.i("ACT-START   " + a.javaClass.simpleName + " task=" + tag(a))
-            }
-
-            override fun onActivityStopped(a: android.app.Activity) {
-                AppLog.i("ACT-STOP    " + a.javaClass.simpleName + " task=" + tag(a)
-                        + " isFinishing=" + a.isFinishing)
-            }
-
-            override fun onActivityDestroyed(a: android.app.Activity) {
-                AppLog.i("ACT-DESTROY " + a.javaClass.simpleName + " task=" + tag(a)
-                        + " isFinishing=" + a.isFinishing
-                        + " configChange=0x" + Integer.toHexString(a.changingConfigurations))
-            }
-
-            override fun onActivityResumed(a: android.app.Activity) {}
-            override fun onActivityPaused(a: android.app.Activity) {}
-            override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
-        })
+        // [32bit-debug] 进程启动标记与全局 Activity 生命周期探针已于 2026-10-16 移除：
+        // 它们是 SoftAP 走错路期间为定位「谁把我们的页面 finish 掉」加的诊断探针，
+        // 不属于功能。崩溃日志落盘（installCrashFileLogger）保留。
 
         if (ConscryptInitializer.isAvailable()) {
             AppLog.i("Conscrypt security provider is active")

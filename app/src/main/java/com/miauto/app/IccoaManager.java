@@ -64,8 +64,6 @@ public class IccoaManager {
     private final Context appCtx;
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
-    /** 本地 ADB 自授权只尝试一次的标志。 */
-    private boolean localAdbAttempted = false;
 
     private UCarAdapter adapter = null;
     private Surface surface = null;
@@ -117,210 +115,33 @@ public class IccoaManager {
     /**
      * 车机热点（SoftAP）开关。
      *
-     * <p>{@code false} = 不强制宣称「车机做热点」；实际开关由 {@link #detectSystemHotspot()}
-     * 在启动时动态决定：系统热点已开着（真车机固件自带热点，恒晨 MT8163 实测 hotspot
-     * state=ENABLED）就宣称并复用，否则维持 P2P-only。
+     * <p>{@code false} = 只宣称 WiFi P2P，不宣称「车机做热点」。
      *
-     * <p>实测依据一（2026-10-14，HUAWEI MRX-W09 / Android 12 作车机端，手机为 vivo X300）：
-     * 侧载应用建热点要 {@code TETHER_PRIVILEGED} / {@code OVERRIDE_WIFI_CONFIG}
-     * / {@code NETWORK_SETTINGS}（{@code signature|privileged}，**侧载应用永远拿不到**），
-     * 热点起不来但车机仍宣称「支持 AP」，手机（vivo/OPPO 尤其）会优先选 AP，把会话建在
-     * 一个不存在的热点上 → 卡在 10% 后 10003/10008。
+     * <p>实测依据（2026-10-14，HUAWEI MRX-W09 / Android 12 作车机端，手机为 vivo X300）：
+     * 关掉 EasyLog 的缺类问题后，SDK 能 `✓ startAdvertise() = true`、能下发配对码，但协商到
+     * <b>{@code onConnectingProgress 10} 就掉回 0</b>，随后 SDK 报 {@code STATE_10003} / {@code STATE_10008}。
+     * 这与社区车机端圈子记录的现象完全一致 —— 「vivo 卡在 10%，解决方法是去掉 AP」
+     * （见 https://www.cnblogs.com/gnz48/p/18346101 ）。
      *
-     * <p>实测依据二（2026-10-15，恒晨 MT8163 真车机 + MEIZU 20 Pro）：手机端 CarWith 期望
-     * AP 通道（BLE Client info type=1002），车机宣称 P2P-only 被迫降级，SDK 日志
-     * 「phone expect ap connection, but car only supports p2p connection」；P2P 组虽建立
-     * （5180 信道、AUTH server 已起），但手机 20 秒内始终未完成密钥协商 →
-     * 「key negotiation not finished in 20000」→ 10008。同时车机系统热点开着且状态抖动
-     * （ACTION_TETHER_STATE_CHANGED 刷屏、首轮 setWifiEnabled(true) failed）。
+     * <p>机理：{@code WifiApService} 建热点要 {@code TETHER_PRIVILEGED} / {@code OVERRIDE_WIFI_CONFIG}
+     * / {@code NETWORK_SETTINGS}，这些是 {@code signature|privileged} 权限，**侧载应用永远拿不到**，
+     * 所以热点这条数据通道根本不可能起来；但车机仍在 {@code GetUCarConfig} 里向手机宣称「我支持 AP」，
+     * 手机（vivo/OPPO 尤其）会优先选 AP，把会话建在一个不存在的热点上 → 卡在 10% 后失败。
+     * 只留 P2P 时，{@code WifiP2pService} 只用普通权限（API 31 定位 / API 33+ NEARBY_WIFI_DEVICES），
+     * 才有机会真正把组拉起来。
      *
-     * <p>机理：SDK 的 {@code WifiApService$WifiApStub.createSoftAp} 在系统热点已开启
-     * （getWifiApState()==13）且 SSID 未变时打「reuse existing Wifi softAp」直接复用——
-     * 不需要任何建热点权限；SSID/密码优先反射 {@code getWifiApConfiguration()} 读系统当前
-     * 热点配置（SDK 同款手法），读不到才用我们传入/随机的值。真车机的标准姿势就是热点常开。
+     * <p>若你的车机是系统签名/预装（真的能开热点），改成 {@code true} 即可恢复两种通道。
      */
-    private static final boolean FORCE_SOFT_AP = false;
+    private static final boolean SUPPORT_SOFT_AP = false;
 
     /** 会话是否已真正建立（手机已连上）。由连接回调维护，看门狗据此避让。 */
     private volatile boolean sessionActive = false;
 
-    // ---- 系统热点检测（SoftAP 通道复用）----
-    /** 系统热点当前已开启（getWifiApState()==13）。启动时检测一次。 */
-    private volatile boolean apAvailable = false;
-    /** 系统热点的 SSID / 密码（反射 getWifiApConfiguration 读出；可为 null，SDK 会兜底）。 */
-    private volatile String apSsid = null;
-    private volatile String apPassword = null;
+    /** 进入 CONNECTING 的时刻；0 表示当前不在协商中。 */
+    private volatile long connectingSince = 0L;
 
-    /** 手动指定热点信息的偏好键（检测 API 失效时兜底）。 */
-    private static final String AP_OVERRIDE_PREFS = "car_id_prefs";
-    private static final String AP_OVERRIDE_SSID_KEY = "car_ap_override_ssid";
-    private static final String AP_OVERRIDE_PASSWORD_KEY = "car_ap_override_password";
-
-    /**
-     * 检测系统热点是否开启，并尽量读出它的 SSID/密码。
-     *
-     * <p>与 SDK 的 {@code WifiApService.getWifiApState()} 同款反射手法（Android 9 侧载可用；
-     * 恒晨 eng 固件无 hidden API 拦截）。三条信息源按序兜底：
-     * <ol>
-     *   <li>反射读系统当前热点配置（{@code getWifiApConfiguration}）；</li>
-     *   <li>{@code car_id_prefs/car_ap_override_ssid|password} 手动指定（用户在平板设置里
-     *       查到热点名/密码后填入，格式见常量名）；</li>
-     *   <li>都拿不到则 SSID/密码留给 SDK 随机生成（手机端从 BLE 广播里拿到值去连，仍可用）。</li>
-     * </ol>
-     *
-     * @return true = 热点已开启，可以宣称 SoftAP 并复用
-     */
-    private boolean detectSystemHotspot() {
-        apAvailable = false;
-        apSsid = null;
-        apPassword = null;
-        // 手动指定优先（覆盖检测值）：用户在设置页填了车机热点的 SSID/密码，就按他给的来。
-        // 侧载应用读不到系统热点配置（getWifiApConfiguration 抛 SecurityException，实测
-        // 2026-10-15 恒晨 MT8163），SDK 也读不到 —— 这是 AP 通道复用唯一可靠的信息源。
-        // 复用 AA 原有的 hotspot-ssid/hotspot-password 偏好（设置页「无线连接」分类可见）。
-        SharedPreferences prefs = appCtx.getSharedPreferences(AP_OVERRIDE_PREFS, Context.MODE_PRIVATE);
-        String manualSsid = prefs.getString(AP_OVERRIDE_SSID_KEY, null);
-        String manualPassword = prefs.getString(AP_OVERRIDE_PASSWORD_KEY, null);
-        try {
-            com.andrerinas.openheadunit.utils.Settings s =
-                    com.andrerinas.openheadunit.App.Companion.provide(appCtx).getSettings();
-            String uiSsid = s.getHotspotSsid();
-            String uiPassword = s.getHotspotPassword();
-            if (uiSsid != null && !uiSsid.trim().isEmpty()) {
-                manualSsid = uiSsid.trim();
-                manualPassword = (uiPassword == null || uiPassword.isEmpty()) ? null : uiPassword;
-            }
-        } catch (Throwable ignored) {
-            // App 未就绪时退回 prefs
-        }
-        android.net.wifi.WifiManager wm =
-                (android.net.wifi.WifiManager) appCtx.getSystemService(Context.WIFI_SERVICE);
-        if (wm == null) {
-            log("热点检测：拿不到 WifiManager");
-            return false;
-        }
-        int apState = -1;
-        try {
-            apState = (Integer) wm.getClass().getMethod("getWifiApState").invoke(wm);
-            // WifiManager.WIFI_AP_STATE_ENABLED = 13（hidden 常量，反射调用故硬编码）
-            log("热点检测：getWifiApState=" + apState + (apState == 13 ? " (ENABLED)" : ""));
-        } catch (Throwable t) {
-            log("热点检测：getWifiApState 反射被拒: " + t);
-        }
-
-        if (manualSsid != null && !manualSsid.trim().isEmpty()) {
-            apSsid = manualSsid.trim();
-            apPassword = (manualPassword == null || manualPassword.isEmpty()) ? null : manualPassword;
-            // SDK 硬校验（UcarConfig$Builder，反编译确认）：SSID 9-32 字节、密码 8-63 字符。
-            // 不合法会在配置构造时抛 IllegalArgumentException → SDK 整个不初始化、配对码消失、
-            // 错误弹窗几乎不可读（2026-10-15 实测 SSID="ad"）。这里前置校验，不合法直接降级。
-            int ssidBytes = apSsid.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-            int passLen = apPassword == null ? 0 : apPassword.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-            boolean ssidOk = ssidBytes >= 9 && ssidBytes <= 32;
-            boolean passOk = apPassword == null || (passLen >= 8 && passLen <= 63);
-            if (!ssidOk || !passOk) {
-                log("✗ 手动热点信息不合法（SSID " + ssidBytes + " 字节须 9-32"
-                        + (apPassword != null ? "，密码 " + passLen + " 字符须 8-63" : "")
-                        + "）→ 放弃手填值，降级读取系统热点配置");
-                apSsid = null;
-                apPassword = null;
-                // 不 return：继续走下面的系统配置读取流程
-            } else {
-                apAvailable = true;
-                log("★ 热点信息来自手动指定：SSID=" + apSsid + " 密码=" + (apPassword == null ? "(开放网络)" : "(已设置)"));
-                if (apState >= 0 && apState != 13) {
-                    // 热点没开 —— 学 CarLife（b9/z.d）：反射 legacy setWifiApEnabled 用我们自己的
-                    // WifiConfiguration（SSID/密码=手动填的值，不需要读系统配置）把热点拉起来。
-                    // 本机 adbd 授权（LocalAdbGranter）后 NETWORK_SETTINGS 在手，此调用可成功。
-                    try {
-                        android.net.wifi.WifiConfiguration wc = new android.net.wifi.WifiConfiguration();
-                        wc.SSID = apSsid;
-                        if (apPassword != null) {
-                            wc.preSharedKey = apPassword;
-                        } else {
-                            wc.allowedKeyManagement.set(android.net.wifi.WifiConfiguration.KeyMgmt.NONE);
-                        }
-                        Boolean ok = (Boolean) wm.getClass()
-                                .getMethod("setWifiApEnabled", android.net.wifi.WifiConfiguration.class, boolean.class)
-                                .invoke(wm, wc, true);
-                        log("legacy setWifiApEnabled 自开热点 → " + ok
-                                + (Boolean.TRUE.equals(ok) ? "（等待系统拉起，SSID=" + apSsid + "）" : "（失败，需手动开热点）"));
-                    } catch (Throwable t) {
-                        log("legacy setWifiApEnabled 反射失败（未授权前属预期）: " + t);
-                    }
-                }
-                return true;
-            }
-        }
-
-        if (apState == 13) {
-            apAvailable = true;
-            try {
-                android.net.wifi.WifiConfiguration wc = (android.net.wifi.WifiConfiguration)
-                        wm.getClass().getMethod("getWifiApConfiguration").invoke(wm);
-                if (wc != null && wc.SSID != null && !wc.SSID.isEmpty()) {
-                    apSsid = stripWifiQuotes(wc.SSID);
-                    apPassword = (wc.preSharedKey == null || wc.preSharedKey.isEmpty()) ? null : wc.preSharedKey;
-                    log("★ 读到系统热点配置：SSID=" + apSsid
-                            + " 密码=" + (apPassword == null ? "(开放网络)" : "(已读出，长度 " + apPassword.length() + ")"));
-                } else {
-                    log("热点开着但配置读不到（SSID 为空）→ SSID/密码交给 SDK 兜底");
-                }
-            } catch (Throwable t) {
-                log("读系统热点配置失败（getWifiApConfiguration 被挡；本地ADB授权后应消失）: " + t);
-            }
-        } else if (apState >= 0) {
-            log("热点未开启且无手动信息 → 维持 P2P-only（此路径手机端会协商失败，属已知问题）");
-        }
-        return apAvailable;
-    }
-
-    /**
-     * 2026-10-16 诊断：列出系统里"手机互联"类应用与声明了 USB 设备/配件过滤的应用。
-     * 目的：MainActivity 在 progress 10 后被系统外部 finish，且 USB 授权后手机无反应——
-     * 需要确认车机是否预装了会抢前台/抢 USB 的厂商互联应用（CarLink/CarWith/ZLink/CarLife/HiCar 等）。
-     */
-    private void logIccoaRelatedApps() {
-        try {
-            android.content.pm.PackageManager pm = appCtx.getPackageManager();
-            StringBuilder sb = new StringBuilder();
-            String[] keywords = {"carlink", "carwith", "iccoa", "zlink", "carlife", "hicar",
-                    "autolink", "smartlink", "carplay", "tlink", "easylink", "互联", "车联", "投屏"};
-            android.content.Intent launcher = new android.content.Intent(android.content.Intent.ACTION_MAIN)
-                    .addCategory(android.content.Intent.CATEGORY_LAUNCHER);
-            for (android.content.pm.ResolveInfo ri : pm.queryIntentActivities(launcher, 0)) {
-                String pkg = ri.activityInfo.packageName;
-                if (pkg.startsWith("com.android.") || pkg.startsWith("com.google.")
-                        || pkg.equals(appCtx.getPackageName())) continue;
-                String label = String.valueOf(ri.loadLabel(pm)).toLowerCase();
-                String lower = pkg.toLowerCase();
-                boolean hit = false;
-                for (String k : keywords) {
-                    if (lower.contains(k) || label.contains(k)) { hit = true; break; }
-                }
-                if (hit) sb.append("\n  · ").append(pkg).append(" [").append(label).append("] → ").append(ri.activityInfo.name);
-            }
-            // 声明 USB 设备/配件过滤的应用（可能与我们竞争 USB 通路）
-            try {
-                android.content.Intent usbDev = new android.content.Intent("android.hardware.usb.action.USB_DEVICE_ATTACHED");
-                for (android.content.pm.ResolveInfo ri : pm.queryIntentActivities(usbDev, 0)) {
-                    sb.append("\n  · USB_DEVICE: ").append(ri.activityInfo.packageName).append(" → ").append(ri.activityInfo.name);
-                }
-            } catch (Throwable ignored) { }
-            log(sb.length() == 0 ? "系统内未见互联类应用（无抢前台嫌疑）" :
-                    "系统互联类应用清单（finish 元凶候选）：" + sb);
-        } catch (Throwable t) {
-            log("互联应用清单查询失败: " + t);
-        }
-    }
-
-    /** 去掉 WifiConfiguration.SSID 自带的英文引号。 */
-    private static String stripWifiQuotes(String s) {
-        if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
-            return s.substring(1, s.length() - 1);
-        }
-        return s;
-    }
+    /** 最后一次「协商有进展」的时刻（onPinCode / onConnectingProgress）。 */
+    private volatile long lastConnectProgressAt = 0L;
 
     /**
      * 用户主动断开后的「静默待机」标志：true 期间暂停自动重新广播与配对码看门狗，
@@ -332,12 +153,6 @@ public class IccoaManager {
 
     /** 手机端 / 车机端用户主动断开时 SDK 回调携带的 param 值（demo 反编译核实）。 */
     private static final int PARAM_DISCONNECT_BY_USER = 11;
-
-    /** 进入 CONNECTING 的时刻；0 表示当前不在协商中。 */
-    private volatile long connectingSince = 0L;
-
-    /** 最后一次「协商有进展」的时刻（onPinCode / onConnectingProgress）。 */
-    private volatile long lastConnectProgressAt = 0L;
 
     /**
      * 本进程内是否已经有手机「真的参与过协商」（收到 progress &gt; 0，或设备已连接）。
@@ -568,23 +383,6 @@ public class IccoaManager {
             }
             return;
         }
-        // 本地 ADB 自授权（LocalAdbGranter）：本机 adbd 若监听 TCP 5555，自动 pm grant
-        // NETWORK_SETTINGS/OVERRIDE_WIFI_CONFIG/TETHER_PRIVILEGED，绕开恒晨框架对热点
-        // 配置接口的非标拦截（zlink 同款权限）。失败静默，不阻塞启动。仅首启执行一次。
-        if (!localAdbAttempted) {
-            localAdbAttempted = true;
-            final android.content.Context ctxForAdb = appCtx;
-            main.postDelayed(() -> LocalAdbGranter.INSTANCE.runAsync(ctxForAdb, s -> {
-                log(s);
-                return kotlin.Unit.INSTANCE;
-            }), 3000);
-        }
-        // 热点检测要在 buildConfig 之前：UCarConfig 在 init() 一次性烘焙，宣称什么通道这里定。
-        detectSystemHotspot();
-        // 2026-10-16 诊断：MainActivity 在 progress 10 后被系统外部 finish（反复打断协商）。
-        // 车机若预装了互联类应用（CarLink/CarWith/ZLink/CarLife 等），它极可能是抢前台/抢 USB 的元凶。
-        // 一次性把系统里的候选应用列进日志，供下次报告的 ATM/task 栈快照对照。
-        logIccoaRelatedApps();
         UCarConfig config;
         try {
             config = buildConfig();
@@ -735,8 +533,7 @@ public class IccoaManager {
 
     private void doAdvertise() {
         if (adapter == null) return;
-        log("广播参数：P2P=true SoftAP=" + (FORCE_SOFT_AP || apAvailable)
-                + " 屏幕=" + screenW + "x" + screenH);
+        log("广播参数：P2P=true SoftAP=" + SUPPORT_SOFT_AP + " 屏幕=" + screenW + "x" + screenH);
         boolean ok = adapter.startAdvertise();
         log((ok ? "✓ " : "✗ ") + "startAdvertise() = " + ok);
         tryStartCast();
@@ -957,26 +754,7 @@ public class IccoaManager {
                 .setSupportAppWindowCast(false)
                 .build();
 
-        // SoftAP 动态开关：系统热点真的开着（或用户手动指定了热点信息）才宣称 AP 通道。
-        // SDK 的 createSoftAp 会「reuse existing Wifi softAp」（热点已开时不碰建热点的特权
-        // API），手机端 CarWith（尤其魅族/vivo）默认偏好 AP，两边一拍即合。
-        //
-        // 2026-10-16：本 ROM（恒晨 MT8163）上侧载 App 读不到热点配置（getWifiApConfiguration
-        // 抛 SecurityException），SDK 的 WifiApService 因此判定「the existing soft ap config
-        // is invalid」并在每次 ACTION_TETHER_STATE_CHANGED 里反复刷这条错误。给用户一个
-        // 「仅 P2P」开关：关掉 SoftAP 后 SDK 不再碰车机热点，走 P2P(WiFi Direct) 单通道。
-        boolean p2pOnly = false;
-        try {
-            p2pOnly = com.andrerinas.openheadunit.App.Companion.provide(appCtx)
-                    .getSettings().getIccoaP2pOnly();
-        } catch (Throwable ignored) {
-            // App 未就绪（理论上不会）：按默认「不限制」处理
-        }
-        boolean softAp = !p2pOnly && (FORCE_SOFT_AP || apAvailable);
-        log("通道宣称：SoftAP=" + softAp + (p2pOnly ? "（用户选了「仅 P2P」，不宣称软 AP）"
-                : (softAp ? " (热点 SSID=" + (apSsid != null ? apSsid : "<SDK 随机>") + ")" : " (P2P-only)")));
-
-        UCarConfig.Builder builder = new UCarConfig.Builder()
+        return new UCarConfig.Builder()
                 .setCarBrMac(carId)                  // 必须恰好 6 字节
                 .setDpi(dpi)                         // 120..640
                 .setRealDpi(realDpi)                 // 120..640
@@ -986,11 +764,11 @@ public class IccoaManager {
                 .setVideoDisplayWidth(vw)
                 .setVideoDisplayHeight(vh)
                 .setSupportP2P(true)
-                .setSupportSoftAP(softAp)
-                // ★ 不再让 SDK 去改车机 WiFi：它需要 NETWORK_SETTINGS/OVERRIDE_WIFI_CONFIG
-                //   （签名/特权权限），侧载 App 必然失败，只会把 AP 配置读成「invalid」并反复重试。
-                //   热点由用户在系统设置里手工开，SSID/密码我们直接传给 SDK。
-                .setReconfigureWifi(false)
+                // SoftAP（车机做热点）：开关见 SUPPORT_SOFT_AP 的注释。侧载应用拿不到
+                // TETHER_PRIVILEGED / OVERRIDE_WIFI_CONFIG / NETWORK_SETTINGS（signature|privileged），
+                // 热点其实起不来；若无脑向手机宣称「支持 AP」，选 AP 的手机会把会话建在
+                // 一个不存在的热点上（社区实测 vivo 最容易卡住），所以这个开关值得按需关掉。
+                .setSupportSoftAP(SUPPORT_SOFT_AP)
                 .setSupportCamera(false)
                 .setSupportHevc(false)
                 .setSupportMic(true)
@@ -999,14 +777,8 @@ public class IccoaManager {
                 .setSupportLowLatencyDecodingMode(false)
                 .setSupportPOINav(false)
                 .setCcdFilePath("ccd.data")
-                .setSupportedWorkModes(workMode);
-        if (softAp) {
-            // SSID/密码传给 SDK 作为兜底：createSoftAp 优先用系统读到的当前热点配置，
-            // 读不到（getWifiApConfiguration 被挡）才用这里传入的值。
-            if (apSsid != null) builder.setWifiSsid(apSsid);
-            if (apPassword != null) builder.setWifiPassword(apPassword);
-        }
-        return builder.build();
+                .setSupportedWorkModes(workMode)
+                .build();
     }
 
     private static final int clamp(int v, int lo, int hi) {

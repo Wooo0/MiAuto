@@ -827,16 +827,7 @@ class MainActivity : BaseActivity() {
         findViewById<View>(R.id.auto_connect_pill)?.visibility = View.GONE
     }
 
-    /**
-     * 2026-10-16 诊断：外部 finish 反复发生在「手机一进入协商（progress 10）」的瞬间。
-     * singleTask 的 MainActivity 被带 FLAG_ACTIVITY_CLEAR_TOP 的启动重新唤起时，旧实例是由
-     * 系统侧 finish 掉的（Activity.finish() 覆写探针不会响），现象与「外部 finish」完全一致。
-     * 所以这里把每次新意图（含 flags 与来源）也记下来，用来区分「别人杀我们」和「自己被 CLEAR_TOP 重启」。
-     */
     override fun onNewIntent(intent: Intent) {
-        AppLog.i("MainActivity.onNewIntent: $intent flags=0x"
-                + Integer.toHexString(intent.flags)
-                + " source=" + (intent.getStringExtra(EXTRA_LAUNCH_SOURCE) ?: "none"))
         super.onNewIntent(intent)
         setIntent(intent)
         handleLaunchIntent(intent)
@@ -1079,44 +1070,6 @@ class MainActivity : BaseActivity() {
         return super.dispatchKeyEvent(event)
     }
 
-    /**
-     * 2026-10-15 诊断：手机一连接（progress 10）MainActivity 就被 finish，onDestroy 堆栈
-     * 只能看到销毁路径本身，看不到 finish() 的调用者 —— 在 finish() 入口直接打堆栈，
-     * 下一份日志就能定位是谁发起的（SDK？系统？我们自己的隐式路径？）。
-     */
-    override fun finish() {
-        AppLog.i("MainActivity.finish() called\n"
-                + android.util.Log.getStackTraceString(Throwable()))
-        super.finish()
-    }
-
-    /** 同 finish()：finishAffinity 会绕过 finish() 覆写，单独堵上。 */
-    override fun finishAffinity() {
-        AppLog.i("MainActivity.finishAffinity() called\n"
-                + android.util.Log.getStackTraceString(Throwable()))
-        super.finishAffinity()
-    }
-
-    /** 同 finish()：finishAndRemoveTask 也会绕过 finish() 覆写。 */
-    override fun finishAndRemoveTask() {
-        AppLog.i("MainActivity.finishAndRemoveTask() called\n"
-                + android.util.Log.getStackTraceString(Throwable()))
-        super.finishAndRemoveTask()
-    }
-
-    /**
-     * 2026-10-16 诊断：系统准备把我们切到后台（按 Home / 切到别的应用）时触发，先于 onStop。
-     * 用来判断"闪退"之前是否先发生了一次"回桌面"——若它总在销毁前出现，说明有个东西在
-     * 主动退到桌面，而不是我们被直接顶掉。
-     *
-     * 注："任务被移除" 的探针在 AapService.onTaskRemoved（那是 Service 的回调，Activity 没有）。
-     * 上一份日志里它一次都没出现 → 已排除 removeTask / finishAndRemoveTask 这条链路。
-     */
-    override fun onUserLeaveHint() {
-        AppLog.i("MainActivity.onUserLeaveHint — 系统准备把我们切到后台/回桌面")
-        super.onUserLeaveHint()
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         if (isFinishReceiverRegistered) {
@@ -1128,112 +1081,7 @@ class MainActivity : BaseActivity() {
             isRecreateReceiverRegistered = false
         }
         if (isFinishing) {
-            // 2026-10-15 诊断：SoftAP=true 时手机一连接 MainActivity 就被 finish，但
-            // finish()/finishAffinity()/finishAndRemoveTask() 三个进程内入口都各有探针，
-            // 现场日志一条都没出现 → finish 由系统侧（system_server）外部发起。
-            // 抓系统事件缓冲：am_finishActivity / am_create_activity 会写明发起组件与 flags。
-            AppLog.i("MainActivity destroyed with isFinishing=true, no in-process finish probe fired"
-                    + " (configChange=0x" + Integer.toHexString(changingConfigurations) + ")"
-                    + " — dumping process list…")
-            val configChange = changingConfigurations
-            // 2026-10-16：先看一眼本应用自己的任务栈。若这里出现 2 个 task、或出现
-            // UsbAttachedActivity / IcocaProjectionActivity 之类的成员，说明"闪退"其实是
-            // 我们自己的另一个 Activity 把任务顶掉/重建，而不是外部应用干的。
-            try {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                    val am = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-                    val tasks = am.appTasks
-                    val sb = StringBuilder("AppTasks at destroy: count=" + tasks.size)
-                    tasks.forEachIndexed { i, t ->
-                        val ti = t.taskInfo
-                        sb.append("\n  #").append(i)
-                            .append(" taskId=").append(ti.id)
-                            .append(" numActivities=").append(ti.numActivities)
-                            .append(" top=").append(ti.topActivity)
-                            .append(" base=").append(ti.baseIntent?.component)
-                    }
-                    AppLog.i(sb.toString())
-                }
-            } catch (t: Throwable) {
-                AppLog.i("AppTasks probe failed: ${t.javaClass.simpleName}: ${t.message}")
-            }
-            // 2026-10-16：logcat 只能读到自己 UID 的日志（Android 4.1+ 起 logd 按 uid 过滤），
-            // events 缓冲与 dumpsys 都被拒 —— 之前两轮探针因此全是「无匹配行」。
-            // 换成零权限的 /proc 视角：闪退瞬间谁新起来了，进程表里看得见。
-            try {
-                Thread {
-                    try {
-                        val p = Runtime.getRuntime().exec(arrayOf("ps"))
-                        val out = p.inputStream.bufferedReader().readText()
-                        val lines = out.lineSequence()
-                            .filter { it.isNotBlank() && !it.startsWith("USER") }
-                            .map { it.trim() }
-                            .toList()
-                        AppLog.i("Process list at finish (${lines.size} 行, configChange=0x"
-                                + Integer.toHexString(configChange) + "):\n"
-                                + lines.takeLast(120).joinToString("\n"))
-                    } catch (t: Throwable) {
-                        AppLog.i("ps probe failed: ${t.javaClass.simpleName}: ${t.message}")
-                    }
-                    // 若「使用情况访问」已授权（设置 → 特殊权限 → 使用情况访问），能直接点名
-                    // 谁在闪退瞬间抢了前台 —— 这是唯一零 root 能拿到「元凶包名」的手段。
-                    try {
-                        val usm = getSystemService(android.app.usage.UsageStatsManager::class.java)
-                        val now = System.currentTimeMillis()
-                        val events = usm?.queryEvents(now - 20_000, now)
-                        if (events == null) {
-                            AppLog.i("UsageStats: 拿不到 UsageStatsManager")
-                        } else {
-                            val sb = StringBuilder()
-                            while (events.hasNextEvent()) {
-                                val e = android.app.usage.UsageEvents.Event()
-                                events.getNextEvent(e)
-                                if (e.eventType == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND ||
-                                    e.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
-                                    sb.append(String.format(java.util.Locale.US, "%tT", java.util.Date(e.timeStamp)))
-                                        .append(' ').append(e.packageName)
-                                        .append(" / ").append(e.className).append('\n')
-                                }
-                            }
-                            AppLog.i("UsageStats 近 20s 前台事件:\n"
-                                    + (if (sb.isEmpty()) "(无 —— 多半是「使用情况访问」未授权)" else sb.toString()))
-                        }
-                    } catch (t: Throwable) {
-                        AppLog.i("UsageStats probe failed: ${t.javaClass.simpleName}: ${t.message}")
-                    }
-                }.apply { name = "FinishProbe" }.start()
-            } catch (_: Throwable) {}
-
-            // 外部 finish 自动拉回（元凶定位前的保底）：协商进行中（Pairing）被系统踢掉时，
-            // 1.5 秒后重新拉起 MainActivity，让连接流程能继续走完——否则每次实测只能拿回
-            // "元凶是谁"，投屏链路本身永远测不通。进程内最多 3 次，防变幽灵应用。
-            val negotiating = try {
-                App.provide(applicationContext).icocaBridge.state.value.phase == IcocaBridge.Phase.Pairing
-            } catch (t: Throwable) {
-                AppLog.i("negotiating check failed: $t")
-                false
-            }
-            if (negotiating) {
-                if (externalFinishRelaunches < 3) {
-                    externalFinishRelaunches++
-                    AppLog.i("★ 外部 finish 且协商中 → 1.5 秒后自动拉回 MainActivity（第 $externalFinishRelaunches/3 次）"
-                            + "，复用现有 ICCOA 会话（不重播、不换配对码）")
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                        try {
-                            val relaunch = Intent(this, MainActivity::class.java).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                putExtra(EXTRA_LAUNCH_SOURCE, RELAUNCH_SOURCE)
-                            }
-                            startActivity(relaunch)
-                            AppLog.i("★ 自动拉回已执行")
-                        } catch (t: Throwable) {
-                            AppLog.i("自动拉回失败: $t")
-                        }
-                    }, 1500)
-                } else {
-                    AppLog.i("外部 finish 且协商中，但已连续拉回 3 次——停止自动拉回，避免无限循环")
-                }
-            }
+            AppLog.i("MainActivity finishing, resetting auto-start flag.")
             HomeFragment.resetAutoStart()
         }
     }
@@ -1242,16 +1090,9 @@ class MainActivity : BaseActivity() {
         private const val permissionRequestCode = 97
         const val EXTRA_LAUNCH_SOURCE = "launch_source"
 
-        /** 外部 finish 自动拉回计数（进程生命周期内，防幽灵应用上限）。 */
-        private var externalFinishRelaunches = 0
-
-        /** 自动拉回时写在 intent 里的来源标记（同时用于不被当成「人手点开」）。 */
-        const val RELAUNCH_SOURCE = "外部finish自动拉回"
-
         /** Launch sources that mean the app opened itself, with nobody necessarily watching. */
         private val AUTOMATIC_LAUNCH_SOURCES = setOf(
-            "Boot auto-start", "USB auto-start", "WiFi auto-start", "Bluetooth auto-start",
-            RELAUNCH_SOURCE
+            "Boot auto-start", "USB auto-start", "WiFi auto-start", "Bluetooth auto-start"
         )
 
         /**

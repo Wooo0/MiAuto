@@ -1559,18 +1559,6 @@ class Settings(private val context: Context) {
         get() = prefs.getBoolean("auto-enable-hotspot", false)
         set(value) { prefs.edit().putBoolean("auto-enable-hotspot", value).apply() }
 
-    /**
-     * ICCOA 无线通道只用 P2P（不宣称车机软 AP）。
-     *
-     * 2026-10-16：本车机 ROM 上侧载 App 读不到系统热点配置（getWifiApConfiguration 抛
-     * SecurityException），SDK 的 WifiApService 因此把 AP 配置判定为 invalid 并反复刷错误 ——
-     * 打开本开关后 SDK 不再涉足车机热点，只走 P2P(WiFi Direct)。改动在 App 重启（UCarConfig
-     * 进程内一次性烘焙）后生效。
-     */
-    var iccoaP2pOnly: Boolean
-        get() = prefs.getBoolean("iccoa-p2p-only", false)
-        set(value) { prefs.edit().putBoolean("iccoa-p2p-only", value).apply() }
-
     var waitForWifiBeforeWifiDirect: Boolean
         get() = prefs.getBoolean("wait-for-wifi-before-wifi-direct", false)
         set(value) { prefs.edit().putBoolean("wait-for-wifi-before-wifi-direct", value).apply() }
@@ -1648,13 +1636,6 @@ class Settings(private val context: Context) {
     var hotspotPassword: String
         get() = prefs.getString("hotspot-password", "")!!
         set(value) = prefs.edit().putString("hotspot-password", value).apply()
-
-    // 连接通道选择（连接设置页顶部的卡片）："usb" = USB 有线，"wireless" = 无线（默认）。
-    // 目前只影响 UI：USB 时待机页不显示配对码、连接设置页隐藏无线配置卡；
-    // 无线广播/BLE 行为不受影响（ICCOA SDK 统一管理，避免破坏现有链路）。
-    var connectionChannel: String
-        get() = prefs.getString("connection-channel", "wireless")!!
-        set(value) = prefs.edit().putString("connection-channel", if (value == "usb") "usb" else "wireless").apply()
 
     // Set once this device has failed to bring its own access point back up after the app took it
     // down, which is the only way to find out that it cannot — no API answers the question in

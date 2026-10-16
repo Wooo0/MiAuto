@@ -243,31 +243,17 @@ object AppLog {
         if (isLoggable(Log.WARN)) log(Log.WARN, format(msg, *params))
     }
 
-    /**
-     * 进程标识前缀。
-     *
-     * 2026-10-16 诊断：车机端反复出现「页面被外部 finish 后自动拉回」，而日志里无法区分
-     * 「同一个进程里 Activity 被重建」和「进程整个被杀、重新拉起」——这两者的排查方向完全
-     * 不同（前者只需复用会话，后者必然丢失 ICCOA 会话与配对码）。带上 pid + 开机毫秒后，
-     * 任何一份日志都能一眼看出进程是否重启过。
-     */
-    private fun pidPrefix(): String {
-        return "p" + android.os.Process.myPid() + "@" + android.os.SystemClock.uptimeMillis() + " "
-    }
-
     private fun log(priority: Int, msg: String) {
-        val stamped = pidPrefix() + msg
-        DiagnosticJournal.record(priority, stamped)
-        LOGGER.println(priority, TAG, stamped)
+        DiagnosticJournal.record(priority, msg)
+        LOGGER.println(priority, TAG, msg)
     }
 
     private fun isLoggable(priority: Int): Boolean = priority >= LOG_LEVEL
 
     private fun loge(message: String, tr: Throwable?) {
         val trace = if (LOGGER is Logger.Android) Log.getStackTraceString(tr) else ""
-        val stamped = pidPrefix() + message
-        DiagnosticJournal.record(Log.ERROR, stamped)
-        LOGGER.println(Log.ERROR, TAG, stamped + '\n' + trace)
+        DiagnosticJournal.record(Log.ERROR, message)
+        LOGGER.println(Log.ERROR, TAG, message + '\n' + trace)
     }
 
     private fun closeAppLogFileLogger() {

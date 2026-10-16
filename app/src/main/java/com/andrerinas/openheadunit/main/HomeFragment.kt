@@ -95,10 +95,7 @@ class HomeFragment : Fragment() {
         val code = state.pinCode
         val codeBlock = view.findViewById<View>(R.id.pairing_code_block)
         if (codeBlock != null) {
-            // USB 通道不显示配对码（用户要求：USB 即插即用，无需配对）；
-            // 无线通道按配对码本身的存在与否显示。
-            val hideByChannel = app.settings.connectionChannel == "usb"
-            if (code.isNullOrBlank() || hideByChannel) {
+            if (code.isNullOrBlank()) {
                 codeBlock.visibility = View.GONE
             } else {
                 view.findViewById<TextView>(R.id.pairing_code)?.text = code
