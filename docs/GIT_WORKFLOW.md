@@ -45,7 +45,7 @@ Hi Wooo0! You've successfully authenticated, but GitHub does not provide shell a
 ### 首次推送（在本机终端执行）
 
 ```bash
-cd <项目路径>/miauto_src
+cd <项目路径>/miauto
 git push -u ours ours/32bit-headunit         # 我们的版本主分支
 git push ours --all && git push ours --tags  # 可选：基线/参照分支与标签一并备份
 ```
@@ -95,13 +95,13 @@ git diff main..johnny/master --stat -- '*.java'      # Johnny 改了什么（注
 ## 4. 每次构建后：重跑状态清单
 
 ```bash
-cd miauto_src && bash tools/state_manifest.sh
+cd miauto && bash tools/state_manifest.sh
 git add docs/BUILD_STATE.md && git commit -m "..."
 ```
 
 `docs/BUILD_STATE.md` 会记录当时的分支/提交，以及三类 **git 记不住**的产物的 md5：
 
-- `sdk_smali/`（4740 个 smali，在 `miauto_src` 仓库之外）
+- `sdk_smali/`（4740 个 smali，在 `miauto` 仓库之外）
 - `*.dex`（`.gitignore` 排除）—— 含 PR#10 原版、补丁版、构建实际挂载版三方对照
 - `output/*.apk`（`.gitignore` 排除）
 
@@ -118,7 +118,7 @@ SDK 走的是这条链，任何一环换掉都要在提交信息里写明前后 
 
 ```
 sdk_smali/*.smali  --java -cp "smali_tools/*" org.jf.smali.Main assemble-->  icar-sdk-patched.dex
-   --cp--> miauto_src/app/libs/icar-sdk.dex
+   --cp--> miauto/app/libs/icar-sdk.dex
    --./gradlew assembleGithubDebug-->  injectIccoaDex 原地追加为 classes5.dex + zipalign + 重签
 ```
 

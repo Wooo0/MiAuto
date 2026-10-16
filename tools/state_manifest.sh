@@ -5,7 +5,7 @@
 #  为什么需要它：
 #    这个项目的成败取决于三类产物，而它们全都落在 git 之外、或者被 .gitignore
 #    排除掉了 ——
-#      · sdk_smali/      在 miauto_src 仓库之外（4740 个 smali，我们手改的 SDK 源码）
+#      · sdk_smali/      在 miauto 仓库之外（4740 个 smali，我们手改的 SDK 源码）
 #      · *.dex           .gitignore 里有 *.dex；SDK dex 与"打进 APK 的那份"都在此列
 #      · output/*.apk    .gitignore 里有 *.apk；12 个历史包
 #
@@ -17,7 +17,7 @@
 #    于是"哈希清单进 git、大文件留在本地"，git 就能连它们一起记录。
 #
 #  用法：
-#    bash tools/state_manifest.sh                # 从 miauto_src/ 目录运行
+#    bash tools/state_manifest.sh                # 从 miauto/ 目录运行
 #    MIAUTO_ROOT=/d/other bash tools/state_manifest.sh   # 手动指定项目根
 # ============================================================================
 set -u
@@ -100,7 +100,7 @@ fi
   echo "> 注意：大小会骗人。修 bug 前后这两个 dex 都曾恰好是 7084160 B，"
   echo "> 只有 md5 能分辨，所以核对一律以 md5 为准。"
   echo
-  echo "## SDK smali 源（在 miauto_src 仓库之外）"
+  echo "## SDK smali 源（在 miauto 仓库之外）"
   echo
   echo "| 项 | 值 |"
   echo "|---|---|"
