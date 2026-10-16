@@ -84,7 +84,7 @@ fi
   echo "| 项 | 值 |"
   echo "|---|---|"
   echo "| 分支 | \`$BRANCH\` |"
-  echo "| 提交 | \`$HEAD_SHA\` — $HEAD_SUBJ |"
+  echo "| 生成时的 HEAD | \`$HEAD_SHA\` — $HEAD_SUBJ |"
   echo "| 工作区 | $DIRTY 个未提交文件 |"
   echo
   echo "## SDK dex 三方对照（本项目最容易出错的地方）"

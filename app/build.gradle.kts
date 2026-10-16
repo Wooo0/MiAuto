@@ -19,7 +19,9 @@ plugins {
 
 android {
     compileSdk = 36
-    ndkVersion = "29.0.14206865"
+    // 本机只装了 NDK 28.2.13676358（PR#10 原本写的是 29.0.14206865）。
+    // 这是纯构建环境适配，不改变任何功能行为 —— 改成 29.x 才能构建的话先装 NDK，不要再动这里。
+    ndkVersion = "28.2.13676358"
     namespace = "com.andrerinas.openheadunit"
 
     buildFeatures {
