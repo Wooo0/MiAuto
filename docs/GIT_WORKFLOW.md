@@ -42,15 +42,37 @@ Hi Wooo0! You've successfully authenticated, but GitHub does not provide shell a
 
 本机密钥：`~/.ssh/id_ed25519` → `SHA256:ouGrey26vVQJKIYpFBj4hcNjBgsegqOTlre8DA4Khxs`
 
-### 首次推送（在本机终端执行）
+### 推送（在本机终端执行）
+
+首次推送已完成（2026-10-16 20:05）：`git push -u ours ours/32bit-headunit` 成功，
+远端已出现 `refs/heads/ours/32bit-headunit`（只传了 431 KiB —— 远端 `main` 与我们有共同历史，增量很小）。
+
+日常继续推：
 
 ```bash
 cd <项目路径>/miauto
-git push -u ours ours/32bit-headunit         # 我们的版本主分支
-git push ours --all && git push ours --tags  # 可选：基线/参照分支与标签一并备份
+git push                    # upstream 已设好，直接推当前分支即可
 ```
 
-推送前远端状态：只有 `main` = `059b2bb`（上游 v0.1.1 的原始 fork 状态），我们的工作尚未上去。
+想把自己这些分支一并备份（只推分支，约 2 MB）：
+
+```bash
+git push ours --all
+```
+
+> ⚠️ **不要用 `--tags`。** 本仓库的 `v0.1.7` 标签指向 Johnny 的提交 `ddc7662`，
+> 推它会把 Johnny 的整段历史（含他 `releases/*.apk`）一起带过去 —— 实测
+> **2824 个对象 / 290.6 MB 未压缩**；而 `--all` 只推分支只要 59 个对象 / 2.1 MB。
+> 确实需要标签就显式挑：`git push ours v0.1.0 v0.1.1`
+
+> ⚠️ **本机默认终端是 Windows PowerShell 5.1，不支持 `&&`。**
+> 报错 `标记"&&"不是此版本中的有效语句分隔符` 就是这个原因。多条命令用 `;` 分隔，或一条一条跑。
+
+远端状态随时可查（**https 在 AI 环境可用，所以能从这边独立核实，不必只看退出码**）：
+
+```bash
+git ls-remote --heads https://github.com/Wooo0/MiAuto.git
+```
 
 > ⚠️ **AI 执行环境的传输差异（实测，务必记住）**
 >
