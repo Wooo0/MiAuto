@@ -11,8 +11,9 @@
 |---|---|---|
 | `main` | `059b2bb` | 上游 v0.1.1，只读参照 |
 | `pr10` | `865b1c7` | **PR#10 干净基线**。要做新东西一律从这里开分支 |
-| `wip/softap-on-2026-10-16` | `8e8d9ed` | 我们走错的那一段（打开 SoftAP + SDK smali 手术）。**保留作记录，不要再往上加东西** |
+| `wip/softap-on-2026-10-16` | `9fb2304` | 我们走错的那一段（打开 SoftAP + SDK smali 手术）。**保留作记录，不要再往上加东西** |
 | `ref/pr24` | `f852d59` | 上游未合并 PR#24，只读参照（32 位 FFmpeg 可用性标注） |
+| **`ours/32bit-headunit`** | `9fb2304` | **我们的版本**。32 位车机适配的主工作分支，后续改动都往这里加 |
 
 新开实验分支：`git checkout -b exp/<一句话描述> pr10`
 
@@ -24,9 +25,43 @@ GitHub 在公司网络下不可达，所以这里把另外三个源头做成了*
 
 | 远程名 | 指向 | 能拿到什么 |
 |---|---|---|
-| `origin` | `github.com/PiggyBackBayonet/MiAuto` | ⚠️ 不可达，仅作配置保留，**推不上去** |
+| **`ours`** | `git@github.com:Wooo0/MiAuto.git` | **我们自己的仓库**（异地备份目标）。见下方认证状态 |
+| `origin` | `github.com/PiggyBackBayonet/MiAuto` | 上游原仓库，只读参照（推送无意义，我们没有写权限） |
 | `offline` | `../refs/upstream` | 上游全量历史（含 `pr10`、`pr24`、`v0.1.0`、`v0.1.1`） |
 | `johnny` | `../refs/johnny` | gitee Johnny_Guo v0.1.7 全量代码（低端车机适配版） |
+
+### `ours` 的认证状态（2026-10-16 19:20）
+
+网络是通的（本机 `~/.ssh/config` 已把 `github.com` 映射到 `ssh.github.com:443`，
+`Connection established` 成功），但**认证被拒**：
+
+```
+git@ssh.github.com: Permission denied (publickey).
+```
+
+本机密钥已存在、也已被送出，只是 GitHub 侧不认识它：
+`~/.ssh/id_ed25519` → `SHA256:ouGrey26vVQJKIYpFBj4hcNjBgsegqOTlre8DA4Khxs`
+
+**待办：把下面这把公钥加到 `Wooo0` 账号**
+（GitHub → Settings → SSH and GPG keys → New SSH key；或该仓库 Settings → Deploy keys）。
+
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPGCWsPl29DVGYgtXvUmFLPRXMHYwUk25X6lpw9+/I21 wang.tao@me.com
+```
+
+加完后验证并推送（**建议在你自己的终端里跑**）：
+
+```bash
+ssh -T git@github.com                       # 期望：Hi <用户名>! You've successfully authenticated...
+cd <项目路径>/miauto_src
+git push -u ours ours/32bit-headunit        # 主分支
+git push ours --all && git push ours --tags # 可选：把基线/参照分支和标签一并备份
+```
+
+> ⚠️ **注意**：在 AI 的执行环境里 `git` 的网络命令会被静默吞掉 ——
+> `git ls-remote` / `git push` 会返回**退出码 0 且零输出**，看起来像成功，实际什么都没做
+> （已用 `GIT_TRACE=1` 验证：连 trace 都不打印；同一时刻直连 `ssh` 才给出真实结果）。
+> **所以推送结果一律以 `git ls-remote ours` 有没有列出 `refs/heads/...` 为准，不要看退出码。**
 
 于是"看别人改了什么"不再靠翻文件，而是：
 
@@ -88,9 +123,14 @@ sdk_smali/*.smali  --java -cp "smali_tools/*" org.jf.smali.Main assemble-->  ica
 
 ## 6. 异地备份
 
-`origin`（GitHub）推不上去，所以当前**没有任何异地副本**。两个选择：
+两条路，互为兜底：
 
-- **立即可用**：`git bundle create ../MiAuto-backup-<日期>.bundle --all`
-  产出单文件全量备份，可拷 U 盘 / 网盘，恢复用 `git clone <bundle> <目标目录>`
-- **长期正解**：推到用户自己的 **gitee** 仓库，或单位**内网 GitLab**（这两个网络都通）。
-  例：`git remote add gitee <你的仓库地址> && git push gitee --all`
+- **立即可用（不依赖任何账号）**：`git bundle`
+  ```bash
+  git bundle create ../MiAuto-ours-<日期>.bundle \
+      refs/heads/main refs/heads/pr10 refs/heads/ref/pr24 refs/heads/ours/32bit-headunit
+  ```
+  产出**单文件全量备份**，可拷 U 盘 / 网盘；恢复：`git clone <bundle> <目标目录>`。
+  2026-10-16 实测：9.66 MB，克隆恢复后 878 个文件、历史完整。
+- **长期正解**：推到我们自己的 `ours`（`git@github.com:Wooo0/MiAuto.git`）。
+  网络路径已通，**只差把公钥注册到 GitHub** —— 见第 2 节的认证状态。
