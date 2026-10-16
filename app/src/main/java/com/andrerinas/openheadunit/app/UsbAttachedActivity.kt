@@ -11,6 +11,7 @@ import android.os.Build
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.andrerinas.openheadunit.App
+import com.andrerinas.openheadunit.BuildConfig
 import com.andrerinas.openheadunit.R
 import com.andrerinas.openheadunit.aap.AapService
 import com.andrerinas.openheadunit.connection.CommManager
@@ -73,6 +74,18 @@ class UsbAttachedActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         AppLog.i("USB Intent: $intent")
+
+        // ICCOA-only: the USB port belongs to the ICCOA SDK's own AOA channel
+        // (UCarAdapter.enableUsbDeviceDetection). Everything here — the AOA switch, the
+        // AapService ACTION_CHECK_USB hop, the AA handshake — would fight the SDK for the
+        // same device (observed on the MT8163 head unit: this activity switched the phone
+        // to accessory mode and Android Auto came up while the ICCOA negotiation was still
+        // running). Step aside completely.
+        if (BuildConfig.ICCOA_ONLY) {
+            AppLog.i("UsbAttachedActivity: ICCOA-only build — USB belongs to the ICCOA SDK (AOA); not touching the device.")
+            finish()
+            return
+        }
 
         val device = resolveUsbDevice(intent)
         if (device == null || !UsbDeviceCompat.isAndroidDevice(device)) {
@@ -168,6 +181,17 @@ class UsbAttachedActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+
+        AppLog.i("USB Intent: $intent")
+
+        // ICCOA-only: same as onCreate — the ICCOA SDK owns the USB port. An instance kept
+        // alive by singleTask would otherwise reach the AOA/AA paths through here on
+        // subsequent attachments.
+        if (BuildConfig.ICCOA_ONLY) {
+            AppLog.i("UsbAttachedActivity: ICCOA-only build — USB belongs to the ICCOA SDK (AOA); not touching the device.")
+            finish()
+            return
+        }
 
         val device = resolveUsbDevice(intent)
         if (device == null || !UsbDeviceCompat.isAndroidDevice(device)) {

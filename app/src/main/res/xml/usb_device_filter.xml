@@ -2,9 +2,9 @@
 
 <resources>
 
-    <!-- Match all devices -->
-    <usb-device />
-
+    <!-- 2026-10-15：删除了空的 <usb-device />（匹配一切设备 → 插 U 盘也弹「用 MiAuto 打开」）。
+         只保留 AOA 模式手机的 Google VID (0x18D1)。ICCOA 的 USB 通道由 SDK 的
+         enableUsbDeviceDetection(true) 自行检测，不依赖这个 intent-filter。 -->
     <usb-device vendor-id="6353" product-id="11520" />
     <usb-device vendor-id="6353" product-id="11521" />
 

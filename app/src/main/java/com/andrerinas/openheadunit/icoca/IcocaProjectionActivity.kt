@@ -24,7 +24,10 @@ import kotlinx.coroutines.launch
  * The ICCOA SDK does not decode video itself — it hands the H.264 stream to a Surface you supply
  * via `UCarAdapter.startCast(surface, w, h)`. This activity exists purely to own that surface and
  * keep it alive while the phone is projecting, which is why it stays deliberately thin: one
- * [SurfaceView], a status hint, and a way out.
+ * [SurfaceView] and a status hint. Exit is phone-driven — the CarLink UI's "return to head unit"
+ * tears the session down, the bridge falls back to Advertising, and this activity finishes itself
+ * (see the state collector in [onCreate]) instead of stacking a permanent on-screen button that
+ * would block the mirrored UI's own top-right controls.
  *
  * It deliberately does *not* reuse `AapProjectionActivity`. That activity is wired end-to-end into
  * the Android Auto session (video-focus negotiation, `CommManager` transport state, AAP keyframes)
@@ -76,20 +79,32 @@ class IcocaProjectionActivity : AppCompatActivity() {
             true
         }
 
-        findViewById<View>(R.id.icoca_disconnect).setOnClickListener {
-            AppLog.i("ICCOA projection: disconnect tapped")
-            // Drop the session but keep advertising: the standby screen goes straight back to
-            // "waiting for phone" and a fresh pairing code, instead of a dead link that needs an
-            // app restart to recover.
-            bridge.disconnectSession()
-            finish()
-        }
-
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                val initial = bridge.state.value
+                var sawProjecting = initial.phase == IcocaBridge.Phase.Connected && initial.castActive
                 bridge.state.collect { state ->
+                    val projecting = state.phase == IcocaBridge.Phase.Connected && state.castActive
                     findViewById<View>(R.id.icoca_hint)?.visibility =
-                        if (state.phase == IcocaBridge.Phase.Connected) View.GONE else View.VISIBLE
+                        if (projecting) View.GONE else View.VISIBLE
+                    if (sawProjecting && !projecting) {
+                        if (state.phase == IcocaBridge.Phase.Connected) {
+                            // Phone-side 返回车机 (GoToDesktop, SDK state 6): the session stays up
+                            // (audio keeps playing, no re-pairing needed) and only the projection
+                            // window yields. Background the whole task so the car's own launcher
+                            // shows — tapping the app icon re-opens projection directly, with no
+                            // standby-screen detour.
+                            AppLog.i("ICCOA projection: GoToDesktop -> moveTaskToBack")
+                            moveTaskToBack(true)
+                        } else {
+                            // Real disconnect (state 0): session gone, back to the standby screen.
+                            AppLog.i("ICCOA projection: session dropped -> finish, back to standby")
+                            finish()
+                        }
+                        sawProjecting = false
+                    } else if (projecting) {
+                        sawProjecting = true
+                    }
                 }
             }
         }

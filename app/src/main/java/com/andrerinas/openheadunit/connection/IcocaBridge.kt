@@ -1,7 +1,9 @@
 package com.andrerinas.openheadunit.connection
 
 import android.content.Context
+import android.content.Intent
 import android.view.Surface
+import com.andrerinas.openheadunit.icoca.IcocaProjectionActivity
 import com.andrerinas.openheadunit.utils.AppLog
 import com.miauto.app.IccoaManager
 import com.ucar.vehiclesdk.UCarCommon
@@ -22,7 +24,7 @@ import kotlinx.coroutines.flow.update
  * MiAuto is ICCOA-only — there is no Android Auto path at runtime — so this bridge (not
  * `CommManager`) is the source of truth for both the home screen and the projection activity.
  */
-class IcocaBridge(context: Context) : IccoaManager.Listener {
+class IcocaBridge(private val context: Context) : IccoaManager.Listener {
 
     /** Coarse connection phase, mapped from the SDK's numeric state. */
     enum class Phase {
@@ -41,6 +43,16 @@ class IcocaBridge(context: Context) : IccoaManager.Listener {
 
     data class State(
         val phase: Phase = Phase.Idle,
+        /**
+         * Whether the projection window should be on screen right now.
+         *
+         * Distinct from [phase]: the phone-side "返回车机" (GoToDesktop, SDK state 6) ends the
+         * *projection* but keeps the *session* (audio keeps playing, no re-pairing needed) — the
+         * SDK reports it as connection state 6 with phase still Connected. State 7
+         * (BackToForeground) asks for the projection window back. Only a real disconnect (state
+         * 1/3/5) or fresh establishment (2/4) moves [phase] itself.
+         */
+        val castActive: Boolean = false,
         /** Pairing code to show on screen, if the SDK handed one out. */
         val pinCode: String? = null,
         val carDeviceName: String? = null,
@@ -70,6 +82,9 @@ class IcocaBridge(context: Context) : IccoaManager.Listener {
             return
         }
         started = true
+        // ICCOA 的帧率烘焙进 UCarConfig（init-once），所以只在首次启动时从设置读一次：
+        // MiAuto 设置里的「帧率限制」(fps-limit) 对 ICCOA 投屏同样生效，而不是写死。
+        manager.setFps(com.andrerinas.openheadunit.App.provide(context).settings.fpsLimit)
         AppLog.i("ICCOA: start()")
         updatePhase(Phase.Advertising)
         manager.start()
@@ -81,7 +96,7 @@ class IcocaBridge(context: Context) : IccoaManager.Listener {
         started = false
         AppLog.i("ICCOA: stop()")
         manager.stop()
-        _state.update { it.copy(phase = Phase.Idle, pinCode = null) }
+        _state.update { it.copy(phase = Phase.Idle, castActive = false, pinCode = null) }
     }
 
     val isStarted: Boolean get() = started
@@ -155,24 +170,70 @@ class IcocaBridge(context: Context) : IccoaManager.Listener {
         _state.update { it.copy(lastLog = msg) }
     }
 
-    override fun onConnectionState(stateCode: Int) {
-        // Codes the SDK actually emits, as seen on hardware:
-        //   0  DISCONNECTED   → back to advertising
-        //   1  CONNECTING     → pairing
-        //   2  CONNECTED      → session is up
-        //   3  ESTABLISHED    → session is up
-        //   4  (connected)    → session is up
-        //   -1 (transient/unknown) → emitted right after a successful negotiation; must NOT be
-        //                            treated as "disconnected", or the just-established session is
-        //                            thrown away and the projection activity is never opened.
-        val phase = when (stateCode) {
-            0 -> Phase.Advertising
-            1 -> Phase.Pairing
-            2, 3, 4 -> Phase.Connected
+    override fun onConnectionState(stateCode: Int, param: Int) {
+        // stop() 之后 SDK worker 线程上可能还有排队中的旧回调；已停止的桥不得改写被
+        // stop() 重置过的状态（否则会把 Idle 又拉回 Advertising，待机页给出假状态）。
+        if (!started) {
+            AppLog.i("ICCOA: connection state $stateCode param=$param ignored — bridge stopped")
+            return
+        }
+        // SDK 真实语义（反编译对照官方 demo 的 packed-switch case 1..7 + SDK 全部 fire 点核实；
+        // 注意这是第 1 个 int，不是接口名里的 "newState"）：
+        //   1 DISCONNECTED     → 设备断开（param==11 = 用户主动断开：手机端 CarLink 断开或车机端断开按钮）
+        //   2 DEVICE_CONNECTED → 设备已连接（会话建立）
+        //   3 CONNECT_FAILED   → 连接失败（param=错误码）
+        //   4 CAST_STARTED     → 投屏已开始（WFD sink ready）
+        //   5 CAST_STOPPED     → 投屏已结束（WFD sink stopped；反编译证实 SDK 内部随后走
+        //                          disconnect → state 1，但那条可能延迟到心跳超时才到）
+        //   6 GO_TO_DESKTOP    → 手机端「返回车机」：会话保留，仅投屏画面退场
+        //   7 BACK_TO_FOREGROUND → 手机端要求投屏画面回来
+        val phase = when {
+            stateCode == 1 && param == 11 -> Phase.Idle // 用户主动断开：静默待机，等刷新配对码
+            stateCode == 1 || stateCode == 3 -> Phase.Advertising // 异常断开/失败：自动重新广播
+            // ★ state 5 必须立刻降级，不能等 state 1。实测（2026-10-15，手机端 CarLink 断开）：
+            //   车机收到的第一条回调是 CAST_STOPPED，DISCONNECTED 要等很久（心跳超时）才到，
+            //   期间 phase 若停留在 Connected，待机页就一直是「手机已连接」，用户点「打开投屏」
+            //   会对着一个已死的会话 startCast → 黑屏。视频流停了就是事实上的断开：先降级，
+            //   后到的 state 1 再决定终态（param=11 → Idle 静默待机；其他 → 保持 Advertising）。
+            //   我们自己 pauseCast（Surface 销毁）引发的 state 5 也没问题：startCast 重启后
+            //   onCastStarted 会把 phase 拉回 Connected。
+            stateCode == 5 -> Phase.Advertising
+            stateCode in 2..7 -> Phase.Connected
+            else -> null // -1 等瞬时值：保持现状
+        }
+        val castActive = when {
+            stateCode == 1 || stateCode == 3 || stateCode == 5 || stateCode == 6 -> false
+            stateCode == 2 || stateCode == 4 || stateCode == 7 -> true
             else -> null
         }
-        AppLog.i("ICCOA: connection state $stateCode -> ${phase?.name ?: "keep ${_state.value.phase}"}")
-        if (phase != null) updatePhase(phase)
+        AppLog.i("ICCOA: connection state $stateCode param=$param -> ${phase?.name ?: "keep ${_state.value.phase}"}"
+                + (castActive?.let { " castActive=$it" } ?: ""))
+        if (phase != null || castActive != null) {
+            _state.update { current ->
+                val newPhase = phase ?: current.phase
+                current.copy(
+                    phase = newPhase,
+                    castActive = castActive ?: current.castActive,
+                    pinCode = if (newPhase == Phase.Pairing) current.pinCode else null,
+                )
+            }
+        }
+        if (stateCode == 7) {
+            // Phone asked to come back to projection. The whole app may be backgrounded at this
+            // point (after a GoToDesktop the task went to the back), and a backgrounded
+            // MainActivity's collector is paused — so the re-open is done here at process level.
+            // singleTask routes to the live instance instead of stacking a second one. Background
+            // activity starts need SYSTEM_ALERT_WINDOW on API 29+; MiAuto's overlays already
+            // require it, and if it wasn't granted the user can still tap the launcher icon.
+            try {
+                context.startActivity(
+                    IcocaProjectionActivity.intent(context)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            } catch (t: Throwable) {
+                AppLog.i("ICCOA: BackToForeground startActivity failed: $t")
+            }
+        }
     }
 
     /**
@@ -184,19 +245,19 @@ class IcocaBridge(context: Context) : IccoaManager.Listener {
      * provides the Surface the SDK casts into.
      */
     override fun onConnectProgress(progress: Int) {
-        if (progress >= 100) updatePhase(Phase.Connected)
+        if (progress >= 100) updatePhase(Phase.Connected, castActive = true)
     }
 
     override fun onPinCode(pinCode: String?, carDeviceName: String?) {
         AppLog.i("ICCOA: pinCode=$pinCode carDeviceName=$carDeviceName")
         _state.update {
-            it.copy(phase = Phase.Pairing, pinCode = pinCode, carDeviceName = carDeviceName)
+            it.copy(phase = Phase.Pairing, castActive = false, pinCode = pinCode, carDeviceName = carDeviceName)
         }
     }
 
     override fun onCastStarted() {
         AppLog.i("ICCOA: cast started")
-        updatePhase(Phase.Connected)
+        updatePhase(Phase.Connected, castActive = true)
     }
 
     override fun onNavigation(info: UCarCommon.NavigationInfo?) {
@@ -212,10 +273,11 @@ class IcocaBridge(context: Context) : IccoaManager.Listener {
      * the screen would invite the user to type a code that is already dead. Clearing on every
      * non-pairing phase is what makes the code "refresh itself" across reconnects.
      */
-    private fun updatePhase(phase: Phase) {
+    private fun updatePhase(phase: Phase, castActive: Boolean? = null) {
         _state.update { current ->
             current.copy(
                 phase = phase,
+                castActive = castActive ?: current.castActive,
                 pinCode = if (phase == Phase.Pairing) current.pinCode else null,
             )
         }

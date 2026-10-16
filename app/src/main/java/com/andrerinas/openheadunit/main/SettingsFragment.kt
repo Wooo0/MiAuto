@@ -813,6 +813,51 @@ class SettingsFragment : Fragment() {
             textResId = R.string.wireless_24ghz_warning
         ))
 
+        // 本地 ADB 自授权已移到「设置 → 权限」页（用户指定位置），
+        // 参见 PermissionsFragment 的 adb_grant_* 区块。
+
+        items.add(SettingItem.CategoryHeader("wirelessConnection", R.string.category_wireless))
+
+        val iccoaHotspotSsid = pendingHotspotSsid.orEmpty()
+        items.add(SettingItem.SettingEntry(
+            stableId = "iccoaHotspotSsidOverride",
+            nameResId = R.string.hotspot_ssid_override,
+            value = iccoaHotspotSsid.ifEmpty { getString(R.string.hotspot_not_filled) },
+            onClick = { _ ->
+                DialogUtils.showTextInputDialogWithMessage(
+                    requireContext(),
+                    R.string.hotspot_ssid_override,
+                    R.string.hotspot_ssid_override_message,
+                    iccoaHotspotSsid,
+                    { newVal ->
+                        pendingHotspotSsid = newVal.trim()
+                        checkChanges()
+                        updateSettingsList()
+                    }
+                )
+            }
+        ))
+
+        val iccoaHotspotPassword = pendingHotspotPassword.orEmpty()
+        items.add(SettingItem.SettingEntry(
+            stableId = "iccoaHotspotPasswordOverride",
+            nameResId = R.string.hotspot_password_override,
+            value = if (iccoaHotspotPassword.isEmpty()) getString(R.string.hotspot_not_filled) else "\u2022".repeat(iccoaHotspotPassword.length),
+            onClick = { _ ->
+                DialogUtils.showTextInputDialogWithMessage(
+                    requireContext(),
+                    R.string.hotspot_password_override,
+                    R.string.hotspot_password_override_message,
+                    iccoaHotspotPassword,
+                    { newVal ->
+                        pendingHotspotPassword = newVal.trim()
+                        checkChanges()
+                        updateSettingsList()
+                    }
+                )
+            }
+        ))
+
         val wirelessModeOptions = listOf(
             getString(R.string.wireless_mode_helper),
             getString(R.string.wireless_mode_native),

@@ -46,6 +46,11 @@ class HomeFragment : Fragment() {
             requireActivity().moveTaskToBack(true)
         }
         view.findViewById<View>(R.id.wifi_button).setOnClickListener { openProjection() }
+        // Contextual disconnect: only rendered while a phone is connected (see render). Drops the
+        // session but keeps advertising, so the phone can pair again without touching the app.
+        view.findViewById<View>(R.id.disconnect_button)?.setOnClickListener {
+            app.icocaBridge.disconnectSession()
+        }
         // Manual "refresh pairing code". The link already re-broadcasts itself every 30 seconds,
         // but a car has no keyboard and a phone whose dialog was dismissed will not come back on
         // its own — this gives the driver an immediate retry without waiting out the cycle.
@@ -90,7 +95,10 @@ class HomeFragment : Fragment() {
         val code = state.pinCode
         val codeBlock = view.findViewById<View>(R.id.pairing_code_block)
         if (codeBlock != null) {
-            if (code.isNullOrBlank()) {
+            // USB 通道不显示配对码（用户要求：USB 即插即用，无需配对）；
+            // 无线通道按配对码本身的存在与否显示。
+            val hideByChannel = app.settings.connectionChannel == "usb"
+            if (code.isNullOrBlank() || hideByChannel) {
                 codeBlock.visibility = View.GONE
             } else {
                 view.findViewById<TextView>(R.id.pairing_code)?.text = code
@@ -100,6 +108,11 @@ class HomeFragment : Fragment() {
 
         val connected = state.phase == IcocaBridge.Phase.Connected
         view.findViewById<View>(R.id.wifi_button)?.visibility =
+            if (connected) View.VISIBLE else View.GONE
+
+        // 断开连接与「打开投屏」同进同退：只在手机已连接时出现（用户要求的位置——待机页，
+        // 替代当初投屏页右上角的常驻按钮）。
+        view.findViewById<View>(R.id.disconnect_button)?.visibility =
             if (connected) View.VISIBLE else View.GONE
 
         // Refresh is pointless once a session is up, so it is the mirror image of "Open projection".

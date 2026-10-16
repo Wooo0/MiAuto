@@ -547,7 +547,7 @@ class CommManager(
         _connectionState.value = ConnectionState.Disconnected(isClean, isUserExit = wasUserExit)
         // Transport already quit on its own — no ByeByeRequest needed (connection is dead).
         _disconnectJob = _scope.launch { doDisconnect(sendByeBye = false) }
-        if (settings.killOnDisconnect) {
+        if (killOnDisconnectAllowed) {
             context.sendBroadcast(android.content.Intent("com.andrerinas.openheadunit.ACTION_FINISH_ACTIVITIES").apply {
                 setPackage(context.packageName)
             })
@@ -572,6 +572,18 @@ class CommManager(
     // -----------------------------------------------------------------------------------------
 
     private val keyStates = mutableMapOf<Int, KeyDebouncePolicy.KeyState>()
+
+    /**
+     * 「断开后退出应用 / killOnDisconnect」在本构建里一律禁用。
+     *
+     * <p>2026-10-16：ICCOA-only 构建下 Android Auto 的传输根本不会起来，但车机端会不停收到
+     * USB 插拔（手机切 AOA 配件模式会重新枚举）等事件；一旦这里判定成「断开」，旧逻辑会
+     * 广播 ACTION_FINISH_ACTIVITIES、stopService，并在 AapService.onDestroy 里
+     * {@code System.exit(0)} —— 进程一死，ICCOA 会话、当前配对码、正在进行的鉴权全部丢失，
+     * 手机端只能等到 15 秒超时（10007）。这条链路在 ICCOA 构建下没有任何收益，直接掐掉。
+     */
+    private val killOnDisconnectAllowed: Boolean
+        get() = settings.killOnDisconnect && !com.andrerinas.openheadunit.BuildConfig.ICCOA_ONLY
 
     /**
      * Sends a key press or release event to the phone with remapping and de-duplication.
@@ -823,7 +835,7 @@ class CommManager(
             _transport?.wasUserExit = true
         }
         _disconnectJob = _scope.launch { doDisconnect(sendByeBye) }
-        if (settings.killOnDisconnect) {
+        if (killOnDisconnectAllowed) {
             context.sendBroadcast(android.content.Intent("com.andrerinas.openheadunit.ACTION_FINISH_ACTIVITIES").apply {
                 setPackage(context.packageName)
             })

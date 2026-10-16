@@ -54,6 +54,93 @@
                 android:layout_marginTop="8dp"
                 android:orientation="vertical" />
 
+            <!-- 本地 ADB 自授权（恒晨 ROM 热点配置接口需要 development 权限） -->
+            <TextView
+                android:id="@+id/adb_grant_section_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="@string/adb_grant_section_title"
+                android:textAppearance="?attr/textAppearanceSubtitle1"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/adb_grant_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textAppearance="?attr/textAppearanceBody2" />
+
+            <TextView
+                android:id="@+id/adb_grant_perms"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textAppearance="?attr/textAppearanceBody2" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/adb_grant_run"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/adb_grant_run_now" />
+
+            <!-- 授权过程实时日志（unix/TCP 连接尝试、AUTH 握手、每条命令输出） -->
+            <ScrollView
+                android:id="@+id/adb_grant_log_scroll"
+                android:layout_width="match_parent"
+                android:layout_height="240dp"
+                android:layout_marginTop="8dp"
+                android:background="#1A000000"
+                android:fillViewport="true">
+
+                <TextView
+                    android:id="@+id/adb_grant_log"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:padding="8dp"
+                    android:fontFamily="monospace"
+                    android:textSize="12sp"
+                    android:textIsSelectable="true" />
+            </ScrollView>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/adb_grant_howto"
+                android:textAppearance="?attr/textAppearanceBody2" />
+
+            <!-- 闪退元凶黑匣子：开启「使用情况访问」后，闪退瞬间的前台事件会被点名 -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="@string/finish_forensics_title"
+                android:textAppearance="?attr/textAppearanceSubtitle1"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/finish_forensics_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textAppearance="?attr/textAppearanceBody2" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/finish_forensics_open"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/finish_forensics_open" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/finish_forensics_hint"
+                android:textAppearance="?attr/textAppearanceBody2" />
+
         </LinearLayout>
     </ScrollView>
 

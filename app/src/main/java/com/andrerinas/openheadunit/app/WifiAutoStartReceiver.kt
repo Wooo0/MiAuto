@@ -73,7 +73,11 @@ class WifiAutoStartReceiver : BroadcastReceiver() {
                 }
 
                 val launchIntent = Intent(context, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    // 2026-10-16：原来带 FLAG_ACTIVITY_CLEAR_TOP。MainActivity 是 singleTask，
+                    // CLEAR_TOP 会由系统侧把已有实例直接 finish 掉（Activity.finish() 覆写探针
+                    // 不会响，日志表现就是「被外部 finish」），正在跑的 ICCOA 协商会因此被打断。
+                    // 单实例语义本来就由 singleTask 保证，去掉 CLEAR_TOP 即可。
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     putExtra(MainActivity.EXTRA_LAUNCH_SOURCE, "WiFi auto-start")
                 }
 

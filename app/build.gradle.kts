@@ -19,7 +19,7 @@ plugins {
 
 android {
     compileSdk = 36
-    ndkVersion = "29.0.14206865"
+    ndkVersion = "28.2.13676358"
     namespace = "com.andrerinas.openheadunit"
 
     buildFeatures {
@@ -86,7 +86,12 @@ android {
         // MiAuto installs as its own package so it can sit alongside DiAuto / DiPlay.
         applicationId = "com.miauto.app"
         minSdk = 16
-        targetSdk = 36
+        // 2026-10-15 MT8163 车机适配：恒晨 ROM 框架对 getWifiApConfiguration/setWifiApEnabled
+        // 等 AP 接口做了非标拦截（"App not allowed to read or update stored WiFi ap config"）。
+        // 实测 targetSdk 28 仍被拦（uid 10115）。zlink6-hengchen（同样侧载、无线 CarPlay 可用）
+        // 的 manifest 为 targetSdk=23 且声明 NETWORK_SETTINGS/OVERRIDE_WIFI_CONFIG —— 故降到
+        // 23 做 zlink 同款判决实验。侧载应用不进应用商店，无 targetSdk 审核要求。
+        targetSdk = 23
         versionCode = 2
         versionName = "0.1.1"
         setProperty("archivesBaseName", "${applicationId}_${versionName}")

@@ -33,6 +33,9 @@ class App : Application() {
         super.onCreate()
         instance = this
 
+        // [32bit-debug] 尽早安装崩溃日志钩子：把未捕获异常写入公共 Downloads 和应用私有目录，
+        // 便于无 adb 环境下从文件管理器/U盘取回崩溃堆栈
+        installCrashFileLogger()
 
 
         // Enable vector drawable support on older Android versions
@@ -65,6 +68,48 @@ class App : Application() {
             AppLog.init(null, this) // Initialize with default logging if locked
             AppLog.w("App started in Direct Boot mode (locked). Settings access deferred.")
         }
+
+        // [32bit-debug] 进程启动标记。
+        // 2026-10-16：上一份日志里 "AapService creating..." 出现 10 次而
+        // "AapService destroying..." 出现 0 次 —— 说明每一轮"闪退"之后进程都是被硬杀掉的
+        // （SIGKILL/force-stop 不走 onDestroy）。这一行给出确凿的进程边界，配合每行的
+        // p<pid>@ 前缀，可以直接把整份日志切成"第 N 轮进程"。
+        AppLog.i("========== 进程启动 PROCESS START pid=" + android.os.Process.myPid()
+                + " uptime=" + android.os.SystemClock.uptimeMillis() + " ==========")
+
+        // [32bit-debug] 全局 Activity 生命周期探针。
+        // 此前只在 MainActivity 上打点，覆盖不到三种情况：
+        //   ① 本应用其它 Activity（UsbAttachedActivity / IcocaProjectionActivity / AutomationActivity）
+        //      被结束；② 同一进程内出现第二个 MainActivity 实例；③ 不同 taskId 上的实例。
+        // 这里统一记录，并带上 taskId / isFinishing / changingConfigurations —— 用于区分
+        // "系统侧外部 finish"、"配置变更重建"、"任务被移除"。
+        registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            private fun tag(a: android.app.Activity): String =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) a.taskId.toString() else "?"
+
+            override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {
+                AppLog.i("ACT-CREATE  " + a.javaClass.simpleName + " task=" + tag(a))
+            }
+
+            override fun onActivityStarted(a: android.app.Activity) {
+                AppLog.i("ACT-START   " + a.javaClass.simpleName + " task=" + tag(a))
+            }
+
+            override fun onActivityStopped(a: android.app.Activity) {
+                AppLog.i("ACT-STOP    " + a.javaClass.simpleName + " task=" + tag(a)
+                        + " isFinishing=" + a.isFinishing)
+            }
+
+            override fun onActivityDestroyed(a: android.app.Activity) {
+                AppLog.i("ACT-DESTROY " + a.javaClass.simpleName + " task=" + tag(a)
+                        + " isFinishing=" + a.isFinishing
+                        + " configChange=0x" + Integer.toHexString(a.changingConfigurations))
+            }
+
+            override fun onActivityResumed(a: android.app.Activity) {}
+            override fun onActivityPaused(a: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
+        })
 
         if (ConscryptInitializer.isAvailable()) {
             AppLog.i("Conscrypt security provider is active")
@@ -107,6 +152,57 @@ class App : Application() {
             userManager.isUserUnlocked
         } else {
             true
+        }
+    }
+
+    /**
+     * [32bit-debug] 全局崩溃日志落盘。
+     * 优先写入公共 Downloads（Android 10+ 走 MediaStore，无需存储权限），
+     * 同时写应用私有外部目录作为兜底。堆栈文件可通过车机文件管理器 / U盘拷出。
+     */
+    private fun installCrashFileLogger() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                    .format(java.util.Date())
+                val sb = StringBuilder()
+                sb.append("===== CRASH ").append(ts)
+                    .append(" thread=").append(t.name).append('\n')
+                sb.append(android.util.Log.getStackTraceString(e)).append('\n')
+                // 1) 应用私有外部目录（无任何权限要求）
+                try {
+                    getExternalFilesDir(null)?.let { dir ->
+                        java.io.File(dir, "miauto_crash_$ts.log").writeText(sb.toString())
+                    }
+                } catch (_: Throwable) {
+                }
+                // 2) 公共 Downloads（API 29+ MediaStore，无需权限）
+                if (Build.VERSION.SDK_INT >= 29) {
+                    try {
+                        val values = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.Downloads.DISPLAY_NAME,
+                                "miauto_crash_$ts.log")
+                            put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")
+                            put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+                        }
+                        val uri = contentResolver.insert(
+                            android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        if (uri != null) {
+                            contentResolver.openOutputStream(uri)?.use { os ->
+                                os.write(sb.toString().toByteArray())
+                                os.flush()
+                            }
+                            values.clear()
+                            values.put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+                            contentResolver.update(uri, values, null, null)
+                        }
+                    } catch (_: Throwable) {
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+            previous?.uncaughtException(t, e)
         }
     }
 

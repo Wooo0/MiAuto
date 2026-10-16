@@ -2073,9 +2073,94 @@ class AapService : Service(), UsbReceiver.Listener {
     // USB
     // -------------------------------------------------------------------------
 
+    /** ICCOA AOA 的 USB 设备权限：SDK 自带的 grantAutomaticPermission 需要 MANAGE_USB
+     *  （侧载拿不到），这里走标准 requestPermission 弹窗让用户点一次允许。 */
+    private var iccoaUsbPermissionReceiverRegistered = false
+    private var lastPermissionRequestedDevice: String? = null
+
+    private fun ensureIccoaUsbPermission(device: UsbDevice) {
+        try {
+            val usbManager = getSystemService(Context.USB_SERVICE) as android.hardware.usb.UsbManager
+            if (usbManager.hasPermission(device)) {
+                AppLog.i("ICCOA USB: device already has permission (VID ${device.vendorId})")
+                return
+            }
+            registerIccoaUsbPermissionReceiver()
+            // 同一次物理连接只弹一次（系统可能连发多个 ATTACHED 广播）
+            if (lastPermissionRequestedDevice == device.deviceName) {
+                AppLog.i("ICCOA USB: permission request already pending for ${device.deviceName}")
+                return
+            }
+            lastPermissionRequestedDevice = device.deviceName
+            val pi = android.app.PendingIntent.getBroadcast(
+                this, 0,
+                Intent(ACTION_ICCOA_USB_PERMISSION).setPackage(packageName),
+                android.app.PendingIntent.FLAG_MUTABLE
+            )
+            usbManager.requestPermission(device, pi)
+            AppLog.i("ICCOA USB: requesting permission for ${device.productName ?: device.deviceName} — 车机屏幕会弹「允许应用访问USB设备？」，请点允许（建议勾选默认使用）")
+        } catch (t: Throwable) {
+            AppLog.i("ICCOA USB: requestPermission failed: $t")
+        }
+    }
+
+    private fun registerIccoaUsbPermissionReceiver() {
+        if (iccoaUsbPermissionReceiverRegistered) return
+        iccoaUsbPermissionReceiverRegistered = true
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != ACTION_ICCOA_USB_PERMISSION) return
+                val granted = intent.getBooleanExtra(
+                    android.hardware.usb.UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                val name = intent.getParcelableExtra<UsbDevice>(
+                    android.hardware.usb.UsbManager.EXTRA_DEVICE)?.deviceName ?: "?"
+                AppLog.i(
+                    if (granted) "ICCOA USB: ★ 用户已授权 $name — AOA 通道现在可以打开设备了"
+                    else "ICCOA USB: ✗ 用户拒绝了 $name 的 USB 权限 — AOA 有线连接无法工作"
+                )
+                if (granted) {
+                    // SDK 的 AOA 内部行为（openDevice/changeToAccessoryMode/bulkTransfer）
+                    // 只打 logcat 不进 AppLog，且诊断报告的 SDK 段只有最近 4000 行会刷掉。
+                    // 授权成功后立刻抓一份 AOA 相关 logcat 快照进 AppLog，报告必含。
+                    Thread {
+                        try {
+                            val p = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "3000"))
+                            val out = p.inputStream.bufferedReader().readText()
+                            val aoa = out.lineSequence().filter {
+                                it.contains("AOA") || it.contains("UCar_AOA") ||
+                                    it.contains("ShareLink") || it.contains("UCar_WifiAp")
+                            }.toList().takeLast(150).joinToString("\n")
+                            AppLog.i("UCar AOA logcat snapshot (post-grant):\n" +
+                                aoa.ifEmpty { "(无 AOA 相关行)" })
+                        } catch (t: Throwable) {
+                            AppLog.i("AOA logcat snapshot failed: $t")
+                        }
+                    }.apply { this.name = "AoaSnapshot" }.start()
+                }
+            }
+        }
+        ContextCompat.registerReceiver(
+            this, receiver,
+            IntentFilter(ACTION_ICCOA_USB_PERMISSION),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
     override fun onUsbAttach(device: UsbDevice) {
         if (!UsbDeviceCompat.isAndroidDevice(device)) {
             AppLog.i("Ignoring non-Android USB device attached in service (VID: ${device.vendorId}): ${device.deviceName}")
+            return
+        }
+        // ICCOA-only: the ICCOA SDK's AOA channel owns the USB port (see UsbAttachedActivity).
+        // Connecting here would switch the phone to accessory mode and start an AA session on
+        // top of the ICCOA link.
+        if (BuildConfig.ICCOA_ONLY) {
+            AppLog.i("USB device attached (VID: ${device.vendorId}) — ICCOA-only build: leaving the device to the ICCOA SDK's AOA channel.")
+            // SDK 的 grantAutomaticPermission 需要 MANAGE_USB（signature 权限，侧载拿不到，
+            // 2026-10-15 恒晨实测 SecurityException）→ openDevice 被拒 → AOA 全瘫，
+            // 手机只能走 BLE 无线配对（用户看到「USB 插上还弹配对码」的根因）。
+            // 兜底：走标准 requestPermission 弹窗，用户在车机屏上点一次允许即可。
+            ensureIccoaUsbPermission(device)
             return
         }
         userExitedAA = false
@@ -2129,6 +2214,12 @@ class AapService : Service(), UsbReceiver.Listener {
     override fun onUsbPermission(granted: Boolean, connect: Boolean, device: UsbDevice) {
         if (!UsbDeviceCompat.isAndroidDevice(device)) {
             AppLog.i("Ignoring USB permission callback for non-Android device (VID: ${device.vendorId}): ${device.deviceName}")
+            return
+        }
+        // ICCOA-only: never connect AA over USB — that permission was requested by the AA
+        // paths we disabled; the ICCOA SDK requests and manages its own USB permissions.
+        if (BuildConfig.ICCOA_ONLY) {
+            AppLog.i("USB permission callback — ICCOA-only build: ignoring (the ICCOA SDK owns USB).")
             return
         }
         val deviceName = UsbDeviceCompat(device).uniqueName
@@ -2227,6 +2318,13 @@ class AapService : Service(), UsbReceiver.Listener {
      *              for the startup scan in [onCreate].
      */
     private fun checkAlreadyConnectedUsb(force: Boolean = false) {
+        // ICCOA-only: no AA-over-USB ever. Even a device already sitting in accessory mode
+        // (switched by an older build or another app) must be left to the ICCOA SDK's AOA
+        // channel, which manages its own permission and connection.
+        if (BuildConfig.ICCOA_ONLY) {
+            AppLog.i("checkAlreadyConnectedUsb skipped — ICCOA-only build: the ICCOA SDK owns USB.")
+            return
+        }
         val settings = App.provide(this).settings
         val lastSession = settings.autoConnectLastSession
         val singleUsb = settings.autoConnectSingleUsbDevice
@@ -3401,6 +3499,7 @@ class AapService : Service(), UsbReceiver.Listener {
         private const val PROJECTION_LAUNCH_NOTIFICATION_ID = 43
 
         // Service action strings used with startService() and sendBroadcast()
+        const val ACTION_ICCOA_USB_PERMISSION = "com.andrerinas.openheadunit.ACTION_ICCOA_USB_PERMISSION"
         const val ACTION_START_SELF_MODE           = "com.andrerinas.openheadunit.ACTION_START_SELF_MODE"
         const val ACTION_START_WIRELESS            = "com.andrerinas.openheadunit.ACTION_START_WIRELESS"
         const val ACTION_BT_AUTO_START              = "com.andrerinas.openheadunit.ACTION_BT_AUTO_START"

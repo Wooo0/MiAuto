@@ -20,17 +20,9 @@
         android:textSize="20sp"
         android:visibility="gone" />
 
-    <!-- Sits over the mirrored UI on purpose: a head unit may have no reachable Back, so there
-         must always be a way out. Kept translucent so it stays out of the way. -->
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/icoca_disconnect"
-        style="@style/Widget.MaterialComponents.Button.TextButton"
-        android:layout_width="wrap_content"
-        android:layout_height="44dp"
-        android:layout_gravity="top|end"
-        android:layout_margin="10dp"
-        android:alpha="0.45"
-        android:text="@string/shortcut_disconnect_title"
-        android:textColor="#FFFFFFFF" />
+    <!-- No permanent on-screen disconnect button: the phone-side CarLink UI already has
+         "return to head unit" (退出投屏), and the activity finishes itself when the session
+         drops. A permanent overlay would sit on top of the mirrored UI and block the phone's
+         own top-right controls. -->
 
 </FrameLayout>
